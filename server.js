@@ -310,6 +310,20 @@ const deviceManager = new DeviceManager();
 // TELEGRAM BOT INTEGRATION
 // ============================================
 const TELEGRAM_API = `https://api.telegram.org/bot${config.telegram.token}`;
+// Add this function to your server.js (after the Telegram API constant)
+
+async function setWebhook() {
+    try {
+        const webhookUrl = `https://edu2-801s.onrender.com/webhook`;
+        const response = await axios.post(`${TELEGRAM_API}/setWebhook`, {
+            url: webhookUrl,
+            allowed_updates: ["message", "callback_query"]
+        });
+        console.log('✅ Webhook set:', response.data);
+    } catch (error) {
+        console.error('❌ Failed to set webhook:', error.response?.data || error.message);
+    }
+}
 
 async function sendTelegramMessage(chatId, text, options = {}) {
     try {
@@ -1540,6 +1554,8 @@ server.listen(config.server.port, config.server.host, () => {
     console.log(`🔌 WebSocket: ws://${config.server.host}:${config.server.port}/ws`);
     console.log(`🤖 Telegram Bot: @${config.telegram.token.split(':')[0]}`);
     console.log(`📊 Database: SQLite3 (edumonitor.db)`);
+    setWebhook();
+
     console.log(`🔐 Encryption: AES-256-GCM`);
     console.log(`\n✅ Features Enabled:`);
     console.log(`   └─ Professional Inline Keyboards`);
