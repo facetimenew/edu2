@@ -16,6 +16,7 @@ const helmet = require('helmet');
 const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
+app.set('trust proxy', 1); // Trust first proxy
 
 // ============================================
 // CONFIGURATION
