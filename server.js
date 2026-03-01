@@ -16,6 +16,12 @@ const helmet = require('helmet');
 const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
+
+// ✅ FIX: Create app FIRST, THEN set trust proxy
+const app = express();
+const server = http.createServer(app);
+
+// ✅ Now set trust proxy (after app is created)
 app.set('trust proxy', 1); // Trust first proxy
 
 // ============================================
@@ -42,7 +48,6 @@ const config = {
         retentionDays: 7
     }
 };
-
 // ============================================
 // DATABASE SETUP
 // ============================================
