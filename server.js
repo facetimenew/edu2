@@ -1265,18 +1265,31 @@ async function showDevicesMenu(chatId, messageId) {
         }
 
         if (!devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
-                '📭 *No Devices Connected*\n\nNo devices are currently connected.',
-                [[{ text: '🔄 REFRESH', callback_data: 'menu_devices' }, 
-                  { text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
+            const text = '📭 *No Devices Connected*\n\nNo devices are currently connected.';
+            const keyboard = [[{ text: '🔄 REFRESH', callback_data: 'menu_devices' }, 
+                               { text: '🔙 MAIN MENU', callback_data: 'menu_main' }]];
+            
+            // Check if the message content would be the same
+            if (callbackQuery && callbackQuery.message.text === text) {
+                // Just answer the callback query without editing
+                answerCallbackQuery(callbackId, 'No devices connected');
+                return;
+            }
+            
+            editMessageText(chatId, messageId, text, keyboard);
             return;
         }
 
-        editMessageText(chatId, messageId,
-            `📱 *Connected Devices (${devices.length})*\n\nSelect a device to control:`,
-            DevicesMenuKeyboard(devices)
-        );
+        const text = `📱 *Connected Devices (${devices.length})*\n\nSelect a device to control:`;
+        const keyboard = DevicesMenuKeyboard(devices);
+        
+        // Check if the message content would be the same
+        if (callbackQuery && callbackQuery.message.text === text) {
+            answerCallbackQuery(callbackId, 'Devices list refreshed');
+            return;
+        }
+        
+        editMessageText(chatId, messageId, text, keyboard);
     });
 }
 
